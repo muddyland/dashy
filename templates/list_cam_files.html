@@ -1,0 +1,151 @@
+{% extends 'main.html' %}
+{% block title %}{% if parking %}Parking{% else %}Driving{% endif %} Files{% endblock %}
+{% block content %}
+<script>
+    function grabFromCamera(passed_as_arg) {
+        
+        // Call the /storage/grab?file=passed_as_arg endpoint with GET request
+        // You can use fetch API or other methods to perform the request
+        fetch("/storage/grab?file=" + passed_as_arg, {
+            method: 'GET',
+        }).then(response => {
+            if (response.ok) {
+                console.log('File grabbed successfully!');
+            } else {
+                console.error('Failed to grab file.');
+            }
+        }).catch(error => {
+            console.error('An error occurred:', error);
+        });
+    }
+</script>
+<h1 class="mt-5 mb-4">Video Files</h1>
+<div class="row">
+    {% if error %}
+    <div class="alert alert-danger">Cannot connect to camera: {{ error }}</div>
+    {% endif %}
+    {% if cam_status == 'connected' %}
+    {% for video_file in video_files %}
+    <div class="col-md-6 mb-4">
+        <div class="card shadow">
+            {% if parking %}
+            <div class="card-header text-center bg-info">
+                <span class="text-center">🅿️ Parking Mode</span>
+            </div>
+            {% else%}
+            <div class="card-header text-center bg-primary">
+                <span class="text-center">🚗 Driving Mode</span>
+            </div>
+            {% endif %}
+            <div class="row g-0">
+                <div class="col-md-6">
+                    <script>
+                        // Get the video element
+                        const video = document.getElementById('{{ video_file.filename }}_vid');
+                        
+                        // Pause the video immediately when loaded
+                        video.addEventListener('loadedmetadata', function() {
+                            video.pause();
+                        });
+                        
+                        // Listen for the first frame loaded event and pause the video
+                        video.addEventListener('loadeddata', function() {
+                            video.pause();
+                        });
+                    </script>
+                    <video id="{{ video_file.filename }}_vid" width="100%" controls="false" preload="metadata">
+                        <source src="{{ hostname }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+                <div class="col-md-6">
+                    <div class="card-body">
+                        <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
+                        <p class="card-text">
+                            <table>
+                                <tr><th>{{ video_file.location }}</th></tr>
+                                <tr><th>{{ video_file.number }}</th></tr>
+                                <tr>
+                                    <td>
+                                        {% if not video_file.downloaded %}
+                                        <button type="button" class="btn btn-primary" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}')">
+                                            <i class="fas fa-cloud-download-alt"></i> Grab
+                                        </button>
+                                        <a class="btn btn-success" href="{{ hostname }}{{ video_file.dir }}/{{ video_file.filename }}" download>
+                                            <i class="fa fa-save"></i> Download
+                                        </a>
+                                        {% else %}
+                                        <button type="button" class="btn btn-success" disabled>
+                                            <i class="fa fa-save"></i> Downloaded
+                                        </button>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            </table>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if total_items > per_page %}
+<nav aria-label="Page navigation">
+    <ul class="pagination justify-content-center">
+
+        {% if has_prev %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page - 1 }}{% if parking %}&parking=True{% endif %}">Previous</a>
+            </li>
+        {% endif %}
+
+        {% if page != 1 %}
+            <li class="page-item">
+                <a class="page-link" href="?page=1{% if parking %}&parking=True{% endif %}">1</a>
+            </li>
+            {% if page > 2 %}
+                <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+        {% endif %}
+
+        {% for num in range(1, total_items // per_page + 2) %}
+            {% if get_min((total_items // per_page) + 1, get_max(1, page - 2)) <= num <= get_max(page + 3, 1) %}
+                {% if num == page %}
+                    <li class="page-item active" aria-current="page">
+                        <span class="page-link">{{ num }}</span>
+                    </li>
+                {% else %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ num }}{% if parking %}&parking=True{% endif %}">{{ num }}</a>
+                    </li>
+                {% endif %}
+            {% elif num == get_max(page + 3, 1) + 1 %}
+                <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+        {% endfor %}
+
+        {% if page != (total_items // per_page) + 1 %}
+            {% if page < (total_items // per_page) %}
+                <li class="page-item disabled"><span class="page-link">...</span></li>
+            {% endif %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ total_items // per_page }}{% if parking %}&parking=True{% endif %}">{{ total_items // per_page }}</a>
+            </li>
+        {% endif %}
+
+        {% if has_next %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ page + 1 }}{% if parking %}&parking=True{% endif %}">Next</a>
+            </li>
+        {% endif %}
+
+    </ul>
+</nav>
+{% endif %}
+{% else %}
+<b>Camera is not connected, you are not able to use this page...</b>
+{% endif %}
+
+{% endblock %}

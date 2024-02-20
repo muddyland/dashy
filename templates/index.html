@@ -1,0 +1,31 @@
+{% extends 'main.html' %}
+
+{% block title %}Home{% endblock %}
+{% block content %}
+<div class="container mt-5">
+    <h1 class="text-center">
+        {{ '📷' if cam_status == 'connected' else '' }} Dashy {{ '🚗' if cam_status == 'connected' else '' }}
+    </h1>
+    <h3 class="text-center">What is Dashy?</h3>
+    <p>
+        Dashy is a web app, and script which aid in the ingestion of Viofo Dashcam footage. When you pull into the driveway, enable WiFi, and your locked videos will automatically be uploaded to a storage path of your choice (even NFS). 
+    </p>
+    <p>
+        Dashy also proxies connections to your dashcam, allowing you to view all clips on the camera, and choose to download those files as well!
+    </p>
+    <p>
+        This is a work in progress, but I will be using it for my personal Dashcam, please keep this in mind,,,
+    </p>
+</div>
+
+<div class="container">
+    <h1>RTSP Stream</h1>
+</div>
+<style>
+    body {
+        background-color: #343a40;
+        color: #fff;
+    }
+
+</style>
+{% endblock %}

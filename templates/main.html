@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashy - {% block title %}{% endblock %}</title>
+
+    <script>
+        document.head.appendChild(Object.assign(document.createElement("link"), {rel: "icon", href: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90' fill='%23ADD8E6'>🚗</text></svg>"}));
+    </script>
+
+    <!-- Include Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Include Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+        video {
+            padding: 15px;
+        }
+        body {
+            background-color: #343a40;
+            color: #fff;
+        }
+        .card {
+            background-color: #61686e;
+            color: #fff;
+        }
+        .card-body {
+            outline-color: white;
+            outline-width: 5px;
+        }
+        .navbar {
+            background-color: #343a40;
+        }
+        .navbar .btn {
+            margin-right: 10px;
+        }
+        .navbar-brand {
+            color: #fff;
+        }
+        .navbar-nav {
+            color: #fff;
+        }
+        .page-item a {
+            background-color: #61686e;
+        }
+        .connected-btn {
+            color: white;
+            background-color: green; 
+        }
+        .disconnected-btn{
+            color: white;
+	    background-color: red;
+        }
+    </style>
+</head>
+<body>
+    <script>
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    </script>
+    <nav class="navbar navbar-expand-md navbar-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">📷 Dashy 🚗</a>
+            <!-- Mobile-friendly status dot -->
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+    
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link btn btn-secondary" href="/"><i class="fas fa-home"></i> Home</a>
+                    </li>
+                    {% if cam_status == 'connected' %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link btn btn-warning dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-camera"></i> Locked Clips
+                            </a>
+                            <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
+                                <li><a class="dropdown-item" href="/cam/locked">🚗 Driving Mode</a></li>
+                                <li><a class="dropdown-item" href="/cam/locked?parking=True">🅿️ Parking Mode</a></li>
+                            </ul>
+                        </li>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link btn btn-info dropdown-toggle" href="#" id="navbarDropdown2" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-camera"></i> All Clips
+                            </a>
+                            <ul class="dropdown-menu" aria-labelledby="navbarDropdown2">
+                                <li><a class="dropdown-item" href="/cam/all">🚗 Driving Mode</a></li>
+                                <li><a class="dropdown-item" href="/cam/all?parking=True">🅿️ Parking Mode</a></li>
+                            </ul>
+                        </li>
+                    {% endif %}
+                    <li class="nav-item">
+                        <a class="nav-link btn btn-success" href="/storage/locked"><i class="fas fa-hdd"></i> Local Storage</a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="http://{{ cam_proxy }}" class="nav-link btn {{ cam_status }}-btn"><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% block content %}
+        {% endblock %}
+    </div>
+    <!-- Include jQuery before Bootstrap JS -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <!-- Include Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

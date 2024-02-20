@@ -1,0 +1,1 @@
+### This is the defauilt folder for Video and DB storage

@@ -1,0 +1,7 @@
+{
+    "cam_ssid" : "SSID_HERE",
+    "cam_ip" : "192.168.1.254",
+    "video_path" : "./videos",
+    "download_parking" : true, //Download Locked parking files
+    "download_locked" : true, //Download Locked parking files
+}
