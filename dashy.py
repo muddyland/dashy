@@ -4,6 +4,10 @@ import time
 from bs4 import BeautifulSoup
 import json
 import subprocess
+import requests_cache
+requests_cache.install_cache('dashy', expire_after=300)
+requests_cache.disabled()
+
 
 def read_config_file(file_path):
     try:
@@ -104,7 +108,8 @@ def download_manual():
         return True
 # Function to download files from the server
 def download_files(base_url, downloaded_files):
-    response = requests.get(base_url + "/DCIM/Movie/RO")
+    with requests_cache.enabled():
+      response = requests.get(base_url + "/DCIM/Movie/RO")
     if response.status_code == 200:
         file_urls = extract_file_urls(response.content)
 
@@ -145,7 +150,8 @@ def download_files(base_url, downloaded_files):
         
 # Function to download files from the server
 def download_parking_files(base_url, downloaded_files):
-    response = requests.get(base_url + "/DCIM/Parking/RO")
+    with requests_cache.enabled():
+        response = requests.get(base_url + "/DCIM/Parking/RO")
     if response.status_code == 200:
         file_urls = extract_file_urls(response.content)
 
@@ -186,14 +192,6 @@ def download_parking_files(base_url, downloaded_files):
 def check_nfs(path):
   return os.path.exists(path)
 
-# Function to mount NFS and print the output
-def mount_nfs_and_print_output():
-    # Run the `mount -av` command to mount NFS
-    output = subprocess.run(['sudo','mount', '-av'], capture_output=True, text=True)
-
-    # Print the output to the console
-    print("Output of `mount -av` command:")
-    print(output.stdout, output.stderr)
 
 # Main script
 if __name__ == "__main__":
@@ -211,31 +209,25 @@ if __name__ == "__main__":
     video_path = f"{config_json['video_path']}/locked"
     db_path = f"{config_json['video_path']}/downloads.json"
     while True:
-        if check_nfs(video_path):
-          if check_wifi_connection():
-              print("WiFi connected.")
-              try:
+        if check_wifi_connection():
+            print("WiFi connected.")
+            try:
                   # Load downloaded files data from downloads.json
-                  downloaded_files = load_downloaded_files()
-                
-                  print("Checking for new videos to download...")
-                  if config_json.get('download_locked', False):
-                    download_files(base_url, downloaded_files)
-                  if config_json.get('download_parking', False):
-                    download_parking_files(base_url, downloaded_files)
-                  print("Videos downloaded successfully.")
-                  print("Downloading manual files...")
-                  if download_manual():
-                      print("Successfully downloaded manual files...")
-                  else:
-                      print("Unsuccessful...")
-              except Exception as e:
-                  print(f"Error downloading files: {str(e)}")
-          else:
-              print("WiFi not connected.")
+              downloaded_files = load_downloaded_files()
+              print("Checking for new videos to download...")
+              if config_json.get('download_locked', False):
+                download_files(base_url, downloaded_files)
+              if config_json.get('download_parking', False):
+                download_parking_files(base_url, downloaded_files)
+                print("Videos downloaded successfully.")
+                print("Downloading manual files...")
+              if download_manual():
+                print("Successfully downloaded manual files...")
+              else:
+                print("Unsuccessful...")
+            except Exception as e:
+              print(f"Error downloading files: {str(e)}")
         else:
-         print("NFS is not mounted...")
-         mount_nfs_and_print_output()
-         
+            print("WiFi not connected.")
         # Wait for 5 minutes before checking again
         time.sleep(180)

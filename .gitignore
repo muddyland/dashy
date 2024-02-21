@@ -4,6 +4,7 @@ manual_downloads.json
 videos/locked/*
 videos/downloads.json
 .download-in-progress
+dashy.sqlite
 # Created by https://www.toptal.com/developers/gitignore/api/python,flask,linux
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,flask,linux
 

@@ -6,6 +6,9 @@ import requests
 import subprocess
 import json
 import pytz
+import requests_cache
+requests_cache.install_cache('dashy', expire_after=300)
+requests_cache.disabled()
 
 app = Flask(__name__)
 
@@ -254,7 +257,8 @@ def list_all_cam_files():
     if parking:
         file_dir = "/DCIM/Parking"
     try:
-        response = requests.get(base_url + file_dir, timeout=10)
+        with requests_cache.enabled():
+          response = requests.get(base_url + file_dir, timeout=60)
     except:
         e = sys.exc_info()
         return render_template('list_cam_files.html', video_files=[], error=f"HTTP error: {e}")
