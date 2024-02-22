@@ -100,6 +100,15 @@
                     <li class="nav-item">
                         <a href="http://{{ cam_proxy }}" class="nav-link btn {{ cam_status }}-btn"><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
                     </li>
+                    <li class="nav-item dropdown">
+                        <button id="view-queue" class="nav-link btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fas fa-download"></i>
+                            <span id="download-count" class="badge bg-info rounded-pill"></span>
+                        </button>
+                        <ul class="dropdown-menu" aria-labelledby="view-queue" id="queue-dropdown">
+                            <!-- Queue items will be dynamically populated here -->
+                        </ul>
+                    </li>
                 </ul>
             </div>
         </div>
@@ -113,5 +122,33 @@
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
     <!-- Include Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        $(document).ready(function() {
+            // Function to update the download count and queue
+            function updateDownloadCountAndQueue() {
+                $.get('/api/queue_len', function(data) {
+                    $('#download-count').text(data.count);
+                });
+    
+                $.get('/api/queue', function(data) {
+                    $('#queue-dropdown').empty();
+                    if (data.queue.length > 0) {
+                        data.queue.forEach(function(item) {
+                            $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">' + item + '</a></li>');
+                        });
+                    } else {
+                        $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">Nothing in the queue!</a></li>');
+                    }
+                });
+            }
+    
+            // Initial update of download count and queue
+            updateDownloadCountAndQueue();
+            // Periodically update the download count and queue every 10 seconds (you can adjust this interval)
+            setInterval(updateDownloadCountAndQueue, 10000);
+        });
+    </script>
+    
 </body>
 </html>

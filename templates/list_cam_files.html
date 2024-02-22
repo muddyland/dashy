@@ -2,22 +2,27 @@
 {% block title %}{% if parking %}Parking{% else %}Driving{% endif %} Files{% endblock %}
 {% block content %}
 <script>
-    function grabFromCamera(passed_as_arg) {
-        
-        // Call the /storage/grab?file=passed_as_arg endpoint with GET request
-        // You can use fetch API or other methods to perform the request
-        fetch("/storage/grab?file=" + passed_as_arg, {
-            method: 'GET',
-        }).then(response => {
-            if (response.ok) {
-                console.log('File grabbed successfully!');
-            } else {
-                console.error('Failed to grab file.');
-            }
-        }).catch(error => {
-            console.error('An error occurred:', error);
-        });
-    }
+    function grabFromCamera(passed_as_arg, button) {
+    
+    // Call the /storage/grab?file=passed_as_arg endpoint with GET request
+    // You can use fetch API or other methods to perform the request
+    fetch("/storage/grab?file=" + passed_as_arg, {
+        method: 'GET',
+    }).then(response => {
+        if (response.ok) {
+            console.log('File grabbed successfully!');
+            // Update button content upon successful file grab
+            button.disabled = true;
+            button.classList.remove('btn-primary');
+            button.classList.add('btn-info');
+            button.innerHTML = '<i class="fa fa-save"></i> In Queue';
+        } else {
+            console.error('Failed to grab file.');
+        }
+    }).catch(error => {
+        console.error('An error occurred:', error);
+    });
+}
 </script>
 <h1 class="mt-5 mb-4">Video Files</h1>
 <div class="row">
@@ -67,13 +72,17 @@
                                 <tr><th>{{ video_file.number }}</th></tr>
                                 <tr>
                                     <td>
-                                        {% if not video_file.downloaded %}
-                                        <button type="button" class="btn btn-primary" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}')">
-                                            <i class="fas fa-cloud-download-alt"></i> Grab
+                                        {% if not video_file.downloaded and not video_file.in_queue %}
+                                        <button type="button" id="'grab-local-{{ video_file.number }}"class="btn btn-primary" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
+                                            <i class="fas fa-cloud-download-alt"></i> Local
                                         </button>
                                         <a class="btn btn-success" href="{{ hostname }}{{ video_file.dir }}/{{ video_file.filename }}" download>
                                             <i class="fa fa-save"></i> Download
                                         </a>
+                                        {% elif video_file.in_queue %}
+                                        <button type="button" class="btn btn-info" disabled>
+                                            <i class="fa fa-save"></i> In Queue
+                                        </button>
                                         {% else %}
                                         <button type="button" class="btn btn-success" disabled>
                                             <i class="fa fa-save"></i> Downloaded

@@ -36,13 +36,13 @@ def read_config_file(file_path):
 
 def generate_video_frames():
     cmd = [
-        "ffmpeg", "-i", "rtsp://192.168.1.254", 
-        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-f", "mpegts", "-"
+        "ffmpeg", "-i", "rtsp://192.168.1.254:554/movie123.mov", 
+        "-c:v", "libx264", "-preset", "ultrafast", "-f", "mpegts", "-"
     ]
     ffmpeg_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     while True:
-        frame = ffmpeg_process.stdout.read(1024)
+        frame = ffmpeg_process.stdout.read(8192)
         if not frame:
             break
         yield frame
@@ -61,6 +61,8 @@ global video_path
 video_path = f"{config_json['video_path']}/locked"
 global db_path
 db_path = f"{config_json['video_path']}/downloads.json"
+global queue_path
+queue_path = f"{config_json['video_path']}/downloads_queue.json"
 
 @app.route('/stream')
 def stream_video():
@@ -80,32 +82,46 @@ def save_downloaded_files(downloaded_files):
     with open(db_path, 'w') as file:
         json.dump(downloaded_files, file)
 
+# Function to save downloaded files data to downloads.json
+def append_download_queue(name):
+    downloaded_files = load_downloaded_files()
+    if name not in downloaded_files:
+        print(f"Appending file {name} to downloads queue...")
+        if os.path.exists(queue_path):
+            with open(queue_path, "r") as file:
+                queue = json.load(file)
+                file.close()
+        else:
+            queue = []
+            
+        queue.append(name)
+        
+        with open(queue_path, 'w') as file:
+            json.dump(queue, file)
+            file.close()
+
+def check_downloads_queue(name):
+    if os.path.exists(queue_path):
+        with open(queue_path, "r") as file:
+            queue = json.load(file)
+            file.close()
+            
+        if name in queue:
+            return True
+        else:
+            return False
+    else:
+        return False
+    
+
 @app.route('/storage/grab')
 def upload_file():
     file_url = request.args.get('file', None, type=str)
     if not file_url:
         return "No file URL"
-    downloaded_files = load_downloaded_files()
-    if file_url not in downloaded_files:
-        try:
-            with open("manual_downloads.json", "r") as manual_files_json:
-                manual_files = json.load(manual_files_json)
-                manual_files_json.close()
-            with open("manual_downloads.json", "w") as f:
-                manual_files.append(file_url)
-                json.dump(manual_files, f)
-                f.close()
-            return "Added to queue"
-        except FileNotFoundError:
-            manual_files = []
-            with open("manual_downloads.json", "w") as f:
-                manual_files.append(file_url)
-                json.dump(manual_files, f)
-                f.close()
-            return "New file created for manual downloads..."
-            
-    else:
-        return "Failed"
+    else:            
+        append_download_queue(file_url)
+        return f"Appended {file_url} to the downloads queue"
 
 # Function to check WiFi connection status
 def check_wifi_connection():
@@ -149,7 +165,7 @@ def extract_file_urls(html_content, file_dir):
                location = "Unknown"
                number = None
             
-            file_urls.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : file_dir, 'downloaded' : downloaded})
+            file_urls.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : file_dir, 'downloaded' : downloaded, 'in_queue' : check_downloads_queue(href)})
 
     if file_urls:
         return sorted(file_urls, key=lambda x: x['created_date'], reverse=True)
@@ -211,16 +227,27 @@ def hass_api_locked():
 def hass_api_is_downloading():
     return jsonify({"download_in_progress" : os.path.isfile(".download-in-progress")})
 
-@app.route('/api/hass/manual')
-def hass_api_manual():
+@app.route('/api/queue_len')
+def api_queue_len():
     try:
-        with open("manual_downloads.json", "r") as manual_files_json:
-            manual_files = json.load(manual_files_json)
-            manual_files_json.close()
+        with open(queue_path, "r") as queue_json:
+            queue = json.load(queue_json)
+            queue_json.close()
         
-        return jsonify({"count" : len(manual_files)})
+        return jsonify({"count" : len(queue)})
     except:
         return jsonify({"count" : 0})
+
+@app.route('/api/queue')
+def api_queue():
+    try:
+        with open(queue_path, "r") as queue_json:
+            queue = json.load(queue_json)
+            queue_json.close()
+        
+        return jsonify({"queue" : queue})
+    except:
+        return jsonify({"queue" : queue})
 
 @app.route('/storage/locked')
 def list_files():
