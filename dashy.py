@@ -108,4 +108,4 @@ if __name__ == "__main__":
         else:
             print("WiFi not connected.")
         # Wait for 5 minutes before checking again
-        time.sleep(180)
+        time.sleep(300)

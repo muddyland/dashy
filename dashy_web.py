@@ -141,22 +141,16 @@ def extract_file_urls(html_content, file_dir):
             file_urls.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : file_dir, 'downloaded' : downloaded, 'in_queue' : check_downloads_queue(href)})
 
     if file_urls:
-        return sorted(file_urls, key=lambda x: x['created_date'], reverse=True)
+        return sorted(file_urls, key=lambda x: x['number'], reverse=True)
     else:
         return []
 def get_video_files():
     video_files = []
     for file_name in os.listdir(video_path):
         if file_name.endswith('.mp4') or file_name.endswith('.MP4'):
-            local_tz = pytz.timezone('America/New_York')
             created_date_from_filename = file_name.split(".")[0].split("_")[0]  # Extract the date from the filename
             created_date = datetime.strptime(created_date_from_filename, '%Y%m%d%H%M%S')
-            # Convert to UTC timezone assuming the original time is in UTC
-            created_date_utc = pytz.utc.localize(created_date)
-            # Convert to local timezone
-            created_date_local = created_date_utc.astimezone(local_tz)
-
-            created_date_formatted = created_date_local.strftime('%m/%d/%Y %H:%M')
+            created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
             if "R" in file_name.split(".")[0].split("_")[1]:
               location = "Rear"
               number = file_name.split(".")[0].split("_")[1]
@@ -174,7 +168,7 @@ def get_video_files():
               
             video_files.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : '/locked', "mode" : mode})
     if video_files:
-        return sorted(video_files, key=lambda x: x['created_date'], reverse=True)
+        return sorted(video_files, key=lambda x: x['number'], reverse=True)
     else:
         return []
 # Dummy function for pagination

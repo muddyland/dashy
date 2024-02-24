@@ -47,13 +47,12 @@
         .connected-btn {
             color: white;
             background-color: green; 
+            padding-left: 10px;
         }
         .disconnected-btn{
             color: white;
-	    background-color: red;
-        }
-        .btn-info {
-            color: white;
+	        background-color: red;
+            padding-left: 10px;
         }
     </style>
 </head>
@@ -75,11 +74,23 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <a class="nav-link btn btn-secondary" href="/"><i class="fas fa-home"></i> Home</a>
+                        <a class="nav-link" href="/"><i class="fas fa-home"></i> Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/storage/locked"><i class="fas fa-hdd"></i> Local Storage</a>
+                    </li>
+                    <li class="nav-item dropdown">
+                        <a id="view-queue" class="nav-link dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" href="#">
+                            <i class="fas fa-download"></i> Queue
+                            <span id="download-count" class="badge bg-primary rounded-pill"></span>
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="view-queue" id="queue-dropdown">
+                            <!-- Queue items will be dynamically populated here -->
+                        </ul>
                     </li>
                     {% if cam_status == 'connected' %}
                         <li class="nav-item dropdown">
-                            <a class="nav-link btn btn-warning dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                                 <i class="fas fa-camera"></i> Locked Clips
                             </a>
                             <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
@@ -88,7 +99,7 @@
                             </ul>
                         </li>
                         <li class="nav-item dropdown">
-                            <a class="nav-link btn btn-info dropdown-toggle" href="#" id="navbarDropdown2" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown2" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                                 <i class="fas fa-camera"></i> All Clips
                             </a>
                             <ul class="dropdown-menu" aria-labelledby="navbarDropdown2">
@@ -98,19 +109,7 @@
                         </li>
                     {% endif %}
                     <li class="nav-item">
-                        <a class="nav-link btn btn-success" href="/storage/locked"><i class="fas fa-hdd"></i> Local Storage</a>
-                    </li>
-                    <li class="nav-item">
-                        <a href="http://{{ cam_proxy }}" class="nav-link btn {{ cam_status }}-btn" {% if cam_status == 'disconnected' %}disabled{% endif %}><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
-                    </li>
-                    <li class="nav-item dropdown">
-                        <button id="view-queue" class="nav-link btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                            <i class="fas fa-download"></i>
-                            <span id="download-count" class="badge bg-info rounded-pill"></span>
-                        </button>
-                        <ul class="dropdown-menu" aria-labelledby="view-queue" id="queue-dropdown">
-                            <!-- Queue items will be dynamically populated here -->
-                        </ul>
+                        <a href="http://{{ cam_proxy }}" class="nav-link {% if cam_status == 'disconnected' %}disconnected-btn{% else %}connected-btn{% endif %}" {% if cam_status == 'disconnected' %}disabled{% endif %}><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
                     </li>
                 </ul>
             </div>
