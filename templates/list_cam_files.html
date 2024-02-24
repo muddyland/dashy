@@ -2,6 +2,22 @@
 {% block title %}{% if parking %}Parking{% else %}Driving{% endif %} Files{% endblock %}
 {% block content %}
 <script>
+    function updateDownloadCountAndQueue() {
+        $.get('/api/queue_len', function(data) {
+            $('#download-count').text(data.count);
+        });
+
+        $.get('/api/queue', function(data) {
+            $('#queue-dropdown').empty();
+            if (data.queue.length > 0) {
+                data.queue.forEach(function(item) {
+                    $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">' + item + '</a></li>');
+                });
+            } else {
+                $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">Nothing in the queue!</a></li>');
+            }
+        });
+    }
     function grabFromCamera(passed_as_arg, button) {
     
     // Call the /storage/grab?file=passed_as_arg endpoint with GET request
@@ -10,6 +26,7 @@
         method: 'GET',
     }).then(response => {
         if (response.ok) {
+            updateDownloadCountAndQueue();
             console.log('File grabbed successfully!');
             // Update button content upon successful file grab
             button.disabled = true;

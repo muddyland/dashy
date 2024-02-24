@@ -52,6 +52,9 @@
             color: white;
 	    background-color: red;
         }
+        .btn-info {
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -98,7 +101,7 @@
                         <a class="nav-link btn btn-success" href="/storage/locked"><i class="fas fa-hdd"></i> Local Storage</a>
                     </li>
                     <li class="nav-item">
-                        <a href="http://{{ cam_proxy }}" class="nav-link btn {{ cam_status }}-btn"><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
+                        <a href="http://{{ cam_proxy }}" class="nav-link btn {{ cam_status }}-btn" {% if cam_status == 'disconnected' %}disabled{% endif %}><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
                     </li>
                     <li class="nav-item dropdown">
                         <button id="view-queue" class="nav-link btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">

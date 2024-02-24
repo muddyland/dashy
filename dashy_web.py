@@ -10,6 +10,8 @@ import requests_cache
 requests_cache.install_cache('dashy', expire_after=300)
 requests_cache.disabled()
 
+from downloads import Downloads
+
 app = Flask(__name__)
 
 def get_max(a, b):
@@ -64,41 +66,12 @@ db_path = f"{config_json['video_path']}/downloads.json"
 global queue_path
 queue_path = f"{config_json['video_path']}/downloads_queue.json"
 
+downloads = Downloads(db_path, queue_path, video_path, base_url)
+
 @app.route('/stream')
 def stream_video():
     return Response(generate_video_frames(), mimetype='video/mp4')
 
-
-# Function to load downloaded files data from downloads.json
-def load_downloaded_files():
-    if os.path.exists(db_path):
-        with open(db_path, 'r') as file:
-            return json.load(file)
-    else:
-        return []
-
-# Function to save downloaded files data to downloads.json
-def save_downloaded_files(downloaded_files):
-    with open(db_path, 'w') as file:
-        json.dump(downloaded_files, file)
-
-# Function to save downloaded files data to downloads.json
-def append_download_queue(name):
-    downloaded_files = load_downloaded_files()
-    if name not in downloaded_files:
-        print(f"Appending file {name} to downloads queue...")
-        if os.path.exists(queue_path):
-            with open(queue_path, "r") as file:
-                queue = json.load(file)
-                file.close()
-        else:
-            queue = []
-            
-        queue.append(name)
-        
-        with open(queue_path, 'w') as file:
-            json.dump(queue, file)
-            file.close()
 
 def check_downloads_queue(name):
     if os.path.exists(queue_path):
@@ -120,7 +93,7 @@ def upload_file():
     if not file_url:
         return "No file URL"
     else:            
-        append_download_queue(file_url)
+        downloads.append_download_queue(file_url)
         return f"Appended {file_url} to the downloads queue"
 
 # Function to check WiFi connection status
@@ -135,7 +108,7 @@ def check_wifi_connection():
 def extract_file_urls(html_content, file_dir):
     soup = BeautifulSoup(html_content, 'html.parser')
     file_urls = []
-    downloaded_files = load_downloaded_files()
+    downloaded_files = downloads.load_downloaded_files()
     for a_tag in soup.find_all('a'):
         href = a_tag.get('href')
         if '.MP4' in href and 'del=1' not in href:
@@ -230,23 +203,17 @@ def hass_api_is_downloading():
 @app.route('/api/queue_len')
 def api_queue_len():
     try:
-        with open(queue_path, "r") as queue_json:
-            queue = json.load(queue_json)
-            queue_json.close()
-        
-        return jsonify({"count" : len(queue)})
+        return jsonify({"count" : downloads.queue_length()})
     except:
         return jsonify({"count" : 0})
 
 @app.route('/api/queue')
 def api_queue():
     try:
-        with open(queue_path, "r") as queue_json:
-            queue = json.load(queue_json)
-            queue_json.close()
-        
+        queue = downloads.load_download_queue()
         return jsonify({"queue" : queue})
     except:
+        queue = []
         return jsonify({"queue" : queue})
 
 @app.route('/storage/locked')
