@@ -18,14 +18,42 @@
     </p>
 </div>
 
-<div class="container">
-    <h1>RTSP Stream</h1>
+    <h1 class="mt-5 mb-4">Latest Downloads</h1>
+    <div class="row">
+    {% for video_file in video_files %}
+    <div class="col-md-6 mb-4">
+        <div class="card shadow">
+            {% if video_file.mode == "Parking" %}
+            <div class="card-header text-center bg-info">
+                <span class="text-center">🅿️ Parking Mode</span>
+            </div>
+            {% else%}
+            <div class="card-header text-center bg-primary">
+                <span class="text-center">🚗 Driving Mode</span>
+            </div>
+            {% endif %}
+            <div class="row g-0">
+                <div class="col-md-6">
+                    <video width="100%" controls="false" preload="metadata" poster="{{ hostname }}/thumbnails/{{ video_file.thumbnail }}">
+                        <source src="{{ hostname }}/locked/{{ video_file.filename }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+                <div class="col-md-6">
+                    <div class="card-body">
+                        <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
+                        <p class="card-text">
+                            <table>
+                                <tr><th>{{ video_file.location }}</th></tr>
+                                <tr><th>{{ video_file.number }}</th></tr>
+                                <tr><th><a href="/locked/{{ video_file.filename }}" class="btn btn-success" download><i class="fas fa-save"></i> Download</a></th></tr>
+                            </table>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
 </div>
-<style>
-    body {
-        background-color: #343a40;
-        color: #fff;
-    }
-
-</style>
 {% endblock %}

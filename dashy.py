@@ -65,11 +65,18 @@ def download_parking_files(base_url):
         # Create a videos directory if it doesn't exist        
         for file_url in file_urls:
             downloads.append_download_queue(file_url)
+        
+def find_missing_thumbnails():
+    local_files = os.listdir(video_path)
+    for f in local_files:
+        file_name = f.split("/")[-1]
+        file_name = file_name.replace(".MP4", "")
+        if not os.path.isfile(f"{thumbnail_path}/{file_name}.jpg"):
+            downloads.generate_preview(f"{video_path}/{file_name}.MP4", file_name)
             
 
 # Main script
 if __name__ == "__main__":
-    
     # Example of how to use the function
     config_file_path = "config.json"
     config_json = read_config_file(config_file_path)
@@ -81,15 +88,14 @@ if __name__ == "__main__":
     
     base_url = f"http://{config_json['cam_ip']}"
     video_path = f"{config_json['video_path']}/locked"
+    thumbnail_path = f"{config_json['video_path']}/thumbnails"
     db_path = f"{config_json['video_path']}/downloads.json"
     queue_path = f"{config_json['video_path']}/downloads_queue.json"
-    downloads = Downloads(db_path, queue_path, video_path, base_url)
+    downloads = Downloads(db_path, queue_path, video_path, base_url, thumbnail_path)
     while True:
         if check_wifi_connection():
             print("WiFi connected.")
             try:
-                  # Load downloaded files data from downloads.json
-              
               # Append Locked driving mode videos
               print("Checking for Locked clips...")
               if config_json.get('download_locked', False):
@@ -103,6 +109,9 @@ if __name__ == "__main__":
               
               # Download all files from queue
               downloads.download_video()
+              time.sleep(10)
+              find_missing_thumbnails()
+              
             except Exception as e:
               print(f"Error downloading files: {str(e)}")
         else:

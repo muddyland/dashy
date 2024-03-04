@@ -6,13 +6,10 @@ import requests
 import subprocess
 import json
 import pytz
-import requests_cache
-requests_cache.install_cache('dashy', expire_after=300)
-requests_cache.disabled()
 
 from downloads import Downloads
 
-app = Flask(__name__)
+app = Flask(__name__, static_url_path='/static', static_folder='./static')
 
 def get_max(a, b):
     return max(a, b)
@@ -65,8 +62,10 @@ global db_path
 db_path = f"{config_json['video_path']}/downloads.json"
 global queue_path
 queue_path = f"{config_json['video_path']}/downloads_queue.json"
+global thumbnail_path
+thumbnail_path = f"{config_json['video_path']}/thumbnails"
 
-downloads = Downloads(db_path, queue_path, video_path, base_url)
+downloads = Downloads(db_path, queue_path, video_path, base_url, thumbnail_path)
 
 @app.route('/stream')
 def stream_video():
@@ -150,6 +149,8 @@ def get_video_files():
         if file_name.endswith('.mp4') or file_name.endswith('.MP4'):
             created_date_from_filename = file_name.split(".")[0].split("_")[0]  # Extract the date from the filename
             created_date = datetime.strptime(created_date_from_filename, '%Y%m%d%H%M%S')
+            local_timezone = pytz.timezone('America/New_York')
+            created_date = created_date.replace(tzinfo=pytz.utc).astimezone(local_timezone)
             created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
             if "R" in file_name.split(".")[0].split("_")[1]:
               location = "Rear"
@@ -165,8 +166,8 @@ def get_video_files():
                 mode = "Parking"
             else:
                 mode = "Driving"
-              
-            video_files.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : '/locked', "mode" : mode})
+            thumbnail_name = file_name.replace(".MP4", ".jpg")
+            video_files.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : '/locked', "mode" : mode, 'thumbnail' : thumbnail_name})
     if video_files:
         return sorted(video_files, key=lambda x: x['number'], reverse=True)
     else:
@@ -179,8 +180,34 @@ def get_paged_files(video_files, page, per_page):
 
 @app.route('/')
 def index():
-    cam_proxy = str(str(request.host).split(":")[0])
-    return render_template('index.html', cam_status=check_wifi_connection(), hostname=cam_proxy, cam_proxy=str(str(request.host).split(":")[0]) + ":8080")
+    cam_proxy = "http://" + str(str(request.host).split(":")[0])
+    video_files = get_video_files()
+     # Pagination implementation
+    per_page = 6  # Number of items per page
+    page = 1
+    start_idx = (page - 1) * per_page
+    end_idx = min(page * per_page, len(video_files))
+    video_files_paginated = video_files[start_idx:end_idx]
+    return render_template('index.html', cam_status=check_wifi_connection(), hostname=cam_proxy, cam_proxy=str(str(request.host).split(":")[0]) + ":8080", video_files=video_files_paginated)
+
+@app.route('/manifest.json')
+def manifest():
+    manifest_json = {
+        "name": "Dashy",
+        "short_name": "Dashy",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": "#ff0000",
+        "icons": [
+            {
+                "src": "/static/img/car_emoji.png",
+                "sizes": "192x192",
+                "type": "image/png"
+            }
+        ]
+    }
+    return jsonify(manifest_json)
 
 @app.route('/api/hass')
 def hass_api():
@@ -245,8 +272,7 @@ def list_all_cam_files():
     if parking:
         file_dir = "/DCIM/Parking"
     try:
-        with requests_cache.enabled():
-          response = requests.get(base_url + file_dir, timeout=60)
+        response = requests.get(base_url + file_dir, timeout=60)
     except:
         e = sys.exc_info()
         return render_template('list_cam_files.html', video_files=[], error=f"HTTP error: {e}")

@@ -1,0 +1,40 @@
+video {
+    padding: 15px;
+}
+body {
+    background-color: #343a40;
+    color: #fff;
+}
+.card {
+    background-color: #61686e;
+    color: #fff;
+}
+.card-body {
+    outline-color: white;
+    outline-width: 5px;
+}
+.navbar {
+    background-color: #343a40;
+}
+.navbar .btn {
+    margin-right: 10px;
+}
+.navbar-brand {
+    color: #fff;
+}
+.navbar-nav {
+    color: #fff;
+}
+.page-item a {
+    background-color: #61686e;
+}
+.connected-btn {
+    color: white;
+    background-color: green; 
+    padding-left: 10px;
+}
+.disconnected-btn{
+    color: white;
+    background-color: red;
+    padding-left: 10px;
+}

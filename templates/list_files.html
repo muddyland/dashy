@@ -17,8 +17,8 @@
             {% endif %}
             <div class="row g-0">
                 <div class="col-md-6">
-                    <video width="100%" controls="false" preload="metadata">
-                        <source src="{{ hostname }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
+                    <video width="100%" controls="false" preload="metadata" poster="{{ hostname }}/thumbnails/{{ video_file.thumbnail }}">
+                        <source src="{{ hostname }}/locked/{{ video_file.filename }}" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
                 </div>
