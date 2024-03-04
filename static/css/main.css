@@ -38,3 +38,6 @@ body {
     background-color: red;
     padding-left: 10px;
 }
+.delete-modal{
+    color: black;
+}

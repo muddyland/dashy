@@ -148,9 +148,10 @@ def get_video_files():
     for file_name in os.listdir(video_path):
         if file_name.endswith('.mp4') or file_name.endswith('.MP4'):
             created_date_from_filename = file_name.split(".")[0].split("_")[0]  # Extract the date from the filename
+            orig_timezone = pytz.timezone('Asia/Riyadh')
             created_date = datetime.strptime(created_date_from_filename, '%Y%m%d%H%M%S')
             local_timezone = pytz.timezone('America/New_York')
-            created_date = created_date.replace(tzinfo=pytz.utc).astimezone(local_timezone)
+            created_date = created_date.replace(tzinfo=orig_timezone).astimezone(local_timezone)
             created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
             if "R" in file_name.split(".")[0].split("_")[1]:
               location = "Rear"
@@ -236,6 +237,25 @@ def api_queue():
     except:
         queue = []
         return jsonify({"queue" : queue})
+    
+
+@app.route('/api/storage/delete', methods=['DELETE'])
+def delete_file():
+    data = request.get_json()
+    print(data)
+    if not data or 'filename' not in data:
+        return jsonify({"error": "Invalid request. Please provide JSON data with 'filename' key."}), 400
+
+    filename = data['filename']
+    print(filename)
+    file_path = os.path.join(video_path, filename)
+
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        return jsonify({"message": f"{filename} deleted successfully."}), 200
+    else:
+        return jsonify({"error": f"File '{filename}' not found."}), 404
+
 
 @app.route('/storage/locked')
 def list_files():

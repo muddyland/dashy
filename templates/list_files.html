@@ -26,18 +26,58 @@
                     <div class="card-body">
                         <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
                         <p class="card-text">
+
                             <table>
                                 <tr><th>{{ video_file.location }}</th></tr>
                                 <tr><th>{{ video_file.number }}</th></tr>
-                                <tr><th><a href="/locked/{{ video_file.filename }}" class="btn btn-success" download><i class="fas fa-save"></i> Download</a></th></tr>
+                                <tr>
+                                    <th>
+                                        <button type="button" class="btn btn-success"><a href="/locked/{{ video_file.filename }}" style="color: white" download><i class="fas fa-save"></i>Download</a></button>
+                                        <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ video_file.number }}"><i class="fas fa-trash"></i> Delete</button>
+                                    </th>
+                                </tr>
                             </table>
+                            <!-- Delete Confirmation Modal -->
+                            <div class="modal fade delete-modal" id="deleteModal-{{ video_file.number }}">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title text-danger fw-bold">Delete Video Clip</h5>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <p>Are you sure you would like to delete "{{ video_file.filename }}"?</p>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                            <button type="button" class="btn btn-danger" onclick="deleteFile('{{ video_file.filename }}')"><i class="fas fa-trash"></i> Delete</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </p>
                     </div>
                 </div>
             </div>
         </div>
     </div>
+
     {% endfor %}
+    <script>
+        function deleteFile(filename) {
+            fetch('/api/storage/delete', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 'filename': filename })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log(data.message || data.error);
+                location.reload();
+            })
+            .catch(error => console.error('Error:', error));      
+        }
+    </script>
 </div>
 
 {% if total_items > per_page %}
