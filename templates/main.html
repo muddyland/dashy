@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="manifest" href="/manifest.json">
+    <title>Dashy - {% block title %}{% endblock %}</title>
+    
+    <link rel="icon" href="/static/img/car_emoji.png">
+    </script>
+
+    <!-- Include Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Include Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+    <nav class="navbar navbar-expand-md navbar-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">📷 Dashy 🚗</a>
+            <!-- Mobile-friendly status dot -->
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+    
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/"><i class="fas fa-home"></i> Home</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/storage/locked"><i class="fas fa-hdd"></i> Local Storage</a>
+                    </li>
+                    <li class="nav-item dropdown">
+                        <a id="view-queue" class="nav-link dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" href="#">
+                            <i class="fas fa-download"></i> Queue
+                            <span id="download-count" class="badge bg-primary rounded-pill"></span>
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="view-queue" id="queue-dropdown">
+                            <!-- Queue items will be dynamically populated here -->
+                        </ul>
+                    </li>
+                    {% if cam_status == 'connected' %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-camera"></i> Locked Clips
+                            </a>
+                            <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
+                                <li><a class="dropdown-item" href="/cam/locked">🚗 Driving Mode</a></li>
+                                <li><a class="dropdown-item" href="/cam/locked?parking=True">🅿️ Parking Mode</a></li>
+                            </ul>
+                        </li>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown2" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-camera"></i> All Clips
+                            </a>
+                            <ul class="dropdown-menu" aria-labelledby="navbarDropdown2">
+                                <li><a class="dropdown-item" href="/cam/all">🚗 Driving Mode</a></li>
+                                <li><a class="dropdown-item" href="/cam/all?parking=True">🅿️ Parking Mode</a></li>
+                            </ul>
+                        </li>
+                    {% endif %}
+                    <li class="nav-item">
+                        <a href="http://{{ cam_proxy }}" class="nav-link {% if cam_status == 'disconnected' %}disconnected-btn{% else %}connected-btn{% endif %}" {% if cam_status == 'disconnected' %}disabled{% endif %}><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% block content %}
+        {% endblock %}
+    </div>
+    <!-- Include jQuery before Bootstrap JS -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <!-- Include Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/downloads.js"></script>
+    
+</body>
+</html>

@@ -1,0 +1,56 @@
+{% extends 'main.html' %}
+
+{% block title %}Home{% endblock %}
+{% block content %}
+<div class="container mt-5">
+    <h3 class="text-center">What is Dashy?</h3>
+    <p>
+        Dashy is a web app, and script which aid in the ingestion of Viofo Dashcam footage. When you pull into the driveway, enable WiFi, and your locked videos will automatically be uploaded to a storage path of your choice (even NFS). 
+    </p>
+    <p>
+        Dashy also proxies connections to your dashcam, allowing you to view all clips on the camera, and choose to download those files as well!
+    </p>
+    <p>
+        This is a work in progress, but I will be using it for my personal Dashcam, please keep this in mind,,,
+    </p>
+</div>
+
+    <h1 class="mt-5 mb-4">Latest Downloads</h1>
+    <div class="row">
+    {% for video_file in video_files %}
+    <div class="col-md-6 mb-4">
+        <div class="card shadow">
+            {% if video_file.mode == "Parking" %}
+            <div class="card-header text-center bg-info">
+                <span class="text-center">🅿️ Parking Mode</span>
+            </div>
+            {% else%}
+            <div class="card-header text-center bg-primary">
+                <span class="text-center">🚗 Driving Mode</span>
+            </div>
+            {% endif %}
+            <div class="row g-0">
+                <div class="col-md-6">
+                    <video width="100%" controls="false" preload="metadata" poster="{{ hostname }}/thumbnails/{{ video_file.thumbnail }}">
+                        <source src="{{ hostname }}/locked/{{ video_file.filename }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+                <div class="col-md-6">
+                    <div class="card-body">
+                        <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
+                        <p class="card-text">
+                            <table>
+                                <tr><th>{{ video_file.location }}</th></tr>
+                                <tr><th>{{ video_file.number }}</th></tr>
+                                <tr><th><a href="/locked/{{ video_file.filename }}" class="btn btn-success" download><i class="fas fa-save"></i> Download</a></th></tr>
+                            </table>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
