@@ -52,11 +52,11 @@
         <div class="card shadow">
             {% if parking %}
             <div class="card-header text-center bg-info">
-                <span class="text-center">🅿️ Parking Mode</span>
+                <span class="text-center">🅿️ Parking Mode ({{ video_file.location }})</span>
             </div>
             {% else%}
             <div class="card-header text-center bg-primary">
-                <span class="text-center">🚗 Driving Mode</span>
+                <span class="text-center">🚗 Driving Mode ({{ video_file.location }})</span>
             </div>
             {% endif %}
             <div class="row g-0">

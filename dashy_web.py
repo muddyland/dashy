@@ -6,10 +6,13 @@ import requests
 import subprocess
 import json
 import pytz
+import requests_cache
 
 from downloads import Downloads
 
 app = Flask(__name__, static_url_path='/static', static_folder='./static')
+
+session = requests_cache.CachedSession(cache_name='dashy_cache', expire_after=600)
 
 def get_max(a, b):
     return max(a, b)
@@ -118,15 +121,9 @@ def extract_file_urls(html_content, file_dir):
             else:
                 downloaded = False
             
-            local_tz = pytz.timezone('America/New_York')
             created_date_from_filename = file_name.split(".")[0].split("_")[0]  # Extract the date from the filename
             created_date = datetime.strptime(created_date_from_filename, '%Y%m%d%H%M%S')
-            # Convert to UTC timezone assuming the original time is in UTC
-            created_date_utc = pytz.utc.localize(created_date)
-            # Convert to local timezone
-            created_date_local = created_date_utc.astimezone(local_tz)
-
-            created_date_formatted = created_date_local.strftime('%m/%d/%Y %H:%M')
+            created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
             if "R" in file_name.split(".")[0].split("_")[1]:
                location = "Rear"
                number = file_name.split(".")[0].split("_")[1]
@@ -137,7 +134,7 @@ def extract_file_urls(html_content, file_dir):
                location = "Unknown"
                number = None
             
-            file_urls.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : file_dir, 'downloaded' : downloaded, 'in_queue' : check_downloads_queue(href)})
+            file_urls.append({'filename': file_name, 'name': created_date_formatted, 'created_date' : created_date, 'created_date_formatted': created_date_formatted, 'location' : location, 'number' : number, 'dir' : file_dir, 'downloaded' : downloaded, 'in_queue' : check_downloads_queue(href)})
 
     if file_urls:
         return sorted(file_urls, key=lambda x: x['created_date'], reverse=True)
@@ -165,7 +162,7 @@ def get_video_files():
             else:
                 mode = "Driving"
             thumbnail_name = file_name.replace(".MP4", ".jpg")
-            video_files.append({'filename': file_name, 'name': created_date_formatted, 'created_date': created_date_formatted, 'location' : location, 'number' : number, 'dir' : '/locked', "mode" : mode, 'thumbnail' : thumbnail_name})
+            video_files.append({'filename': file_name, 'name': created_date_formatted, 'created_date' : created_date, 'created_date_formatted': created_date_formatted, 'location' : location, 'number' : number, 'dir' : '/locked', "mode" : mode, 'thumbnail' : thumbnail_name})
     if video_files:
         return sorted(video_files, key=lambda x: x['created_date'], reverse=True)
     else:
@@ -289,7 +286,7 @@ def list_all_cam_files():
     if parking:
         file_dir = "/DCIM/Parking"
     try:
-        response = requests.get(base_url + file_dir, timeout=60)
+        response = session.get(base_url + file_dir, timeout=180)
     except:
         e = sys.exc_info()
         return render_template('list_cam_files.html', video_files=[], error=f"HTTP error: {e}")
@@ -332,7 +329,7 @@ def list_cam_files():
         file_dir = "/DCIM/Parking/RO"
         
     try:
-        response = requests.get(base_url + file_dir, timeout=10)
+        response = requests.get(base_url + file_dir, timeout=180)
     except:
         e = sys.exc_info()
         return render_template('list_cam_files.html', video_files=[], error=f"HTTP error: {e}")

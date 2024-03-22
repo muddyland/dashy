@@ -78,6 +78,25 @@
     <!-- Include Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.1/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/static/js/downloads.js"></script>
-    
+    <div class="spinner-overlay">
+        <div class="spinner"></div>
+    </div>
+    <script>
+        $(document).ready(function() {
+            $('.spinner-overlay').hide(); // Hide the spinner initially
+
+            $(document).ajaxStart(function() {
+                // Show the spinner when an AJAX request is sent
+                $('.spinner-overlay').show();
+            });
+
+            $(document).ajaxStop(function() {
+                // Hide the spinner when all AJAX requests have completed
+                $('.spinner-overlay').hide();
+            });
+
+            // You can further customize this to handle page loading events if not relying on AJAX
+        });
+    </script>
 </body>
 </html>
