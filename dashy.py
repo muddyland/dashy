@@ -42,7 +42,7 @@ def extract_file_urls(html_content):
         
 # Function to download files from the server
 def download_files(base_url):
-    response = requests.get(base_url + "/DCIM/Movie/RO")
+    response = requests.get(base_url + "/DCIM/Movie/RO", timeout=300)
     if response.status_code == 200:
         file_urls = extract_file_urls(response.content)
 
