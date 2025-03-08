@@ -5,12 +5,13 @@ import tempfile
 import subprocess
 
 class Downloads:
-    def __init__(self, db_path, queue_path, download_path, base_url, thumbnail_path):
+    def __init__(self, db_path, queue_path, download_path, base_url, thumbnail_path, timeout):
         self.db_path = db_path
         self.queue_path = queue_path
         self.base_url = base_url
         self.download_path = download_path
         self.thumbnail_path = thumbnail_path
+        self.timeout = timeout
         
     # Function to load downloaded files data from downloads.json
     def load_downloaded_files(self):
@@ -96,7 +97,7 @@ class Downloads:
                 for file_url in file_urls:
                     file_name = file_url.split('/')[-1]
                     file_path = f'{self.download_path}/{file_name}'
-                    with requests.get(self.base_url + file_url, stream=True) as response:
+                    with requests.get(self.base_url + file_url, stream=True, timeout=self.timeout) as response:
                         if response.status_code == 200:
                             with open(file_path, "wb+") as temp_file:
                                 print(f"Downloading from URL: {self.base_url}{file_url} to {temp_file.name}")

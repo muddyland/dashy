@@ -104,7 +104,10 @@ if __name__ == "__main__":
     
     db_path = f"{config_json['video_path']}/downloads.json"
     queue_path = f"{config_json['video_path']}/downloads_queue.json"
-    downloads = Downloads(db_path, queue_path, video_path, base_url, thumbnail_path)
+    
+    requests_timeout = int(config_json.get('request_timeout', 900))
+    
+    downloads = Downloads(db_path, queue_path, video_path, base_url, thumbnail_path, requests_timeout)
     while True:
         
         if check_wifi_connection():
