@@ -68,7 +68,10 @@ queue_path = f"{config_json['video_path']}/downloads_queue.json"
 global thumbnail_path
 thumbnail_path = f"{config_json['video_path']}/thumbnails"
 
-downloads = Downloads(db_path, queue_path, video_path, base_url, thumbnail_path)
+# Get timeout, not needed in this context, but whatever 
+requests_timeout = int(config_json.get("requests_timeout", 900))
+
+downloads = Downloads(db_path, queue_path, video_path, base_url, thumbnail_path, requests_timeout)
 
 @app.route('/stream')
 def stream_video():
