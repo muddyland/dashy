@@ -7,6 +7,7 @@ videos/downloads_queue.json
 .download-in-progress
 dashy.sqlite
 http_cache.sqlite
+dashy_cache.sqlite
 # Created by https://www.toptal.com/developers/gitignore/api/python,flask,linux
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,flask,linux
 

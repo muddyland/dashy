@@ -16,6 +16,12 @@
     <link rel="stylesheet" href="/static/css/main.css">
 </head>
 <body>
+    
+    <!-- Include jQuery before Bootstrap JS -->
+    <script src="/static/js/jquery.min.js"></script>
+    <script src="/static/js/downloads.js"></script>
+    <!-- Include Bootstrap JS -->
+    <script src="/static/js/bootstrap.min.js"></script>
     <nav class="navbar navbar-expand-md navbar-dark">
         <div class="container">
             <a class="navbar-brand" href="#">📷 Dashy 🚗</a>
@@ -35,9 +41,10 @@
                     <li class="nav-item dropdown">
                         <a id="view-queue" class="nav-link dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" href="#">
                             <i class="fas fa-download"></i> Queue
-                            <span id="download-count" class="badge bg-primary rounded-pill"></span>
+                            <span id="download-count" class="badge bg-primary rounded-pill">?</span>
                         </a>
                         <ul class="dropdown-menu" aria-labelledby="view-queue" id="queue-dropdown">
+                            <li><a class="dropdown-item" href="#">Loading...</a></li>
                             <!-- Queue items will be dynamically populated here -->
                         </ul>
                     </li>
@@ -73,11 +80,6 @@
         {% block content %}
         {% endblock %}
     </div>
-    <!-- Include jQuery before Bootstrap JS -->
-    <script src="/static/js/jquery.min.js"></script>
-    <!-- Include Bootstrap JS -->
-    <script src="/static/js/bootstrap.min.js"></script>
-    <script src="/static/js/downloads.js"></script>
     <div class="spinner-overlay">
         <div class="spinner"></div>
     </div>

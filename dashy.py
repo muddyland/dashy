@@ -86,13 +86,27 @@ if __name__ == "__main__":
         print("Missing config file!")
         os._exit(100)
     
+    # Url for the camera
     base_url = f"http://{config_json['cam_ip']}"
+    
+    # Path to save video to 
     video_path = f"{config_json['video_path']}/locked"
+    if not os.path.exists(video_path):
+        print(f"Path {video_path} doesn't exist, creating it...")
+        os.makedirs(video_path)
+        
+    # Path of the thumbnails 
     thumbnail_path = f"{config_json['video_path']}/thumbnails"
+    if not os.path.exists(thumbnail_path):
+        print(f"Path {thumbnail_path} doesn't exist, creating it...")
+        os.makedirs(thumbnail_path)
+    
+    
     db_path = f"{config_json['video_path']}/downloads.json"
     queue_path = f"{config_json['video_path']}/downloads_queue.json"
     downloads = Downloads(db_path, queue_path, video_path, base_url, thumbnail_path)
     while True:
+        
         if check_wifi_connection():
             print("WiFi connected.")
             try:
