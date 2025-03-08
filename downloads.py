@@ -61,7 +61,11 @@ class Downloads:
             f.write("downloading")
             
     def stop_download_lock(self):
-        os.unlink(".download-in-progress")
+        try:
+            os.unlink(".download-in-progress")
+            print("Lockfile has been cleared")
+        except FileNotFoundError:
+            print("No lockfile to clear")
         
     def generate_preview(self, file_path, file_name):
         print("Generating Thumbnail...")

@@ -108,6 +108,7 @@ if __name__ == "__main__":
     while True:
         
         if check_wifi_connection():
+            downloads.stop_download_lock()
             print("WiFi connected.")
             try:
               # Append Locked driving mode videos
