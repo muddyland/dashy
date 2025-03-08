@@ -9,6 +9,31 @@ export GUNICORN_BIND_ADDRESS=0.0.0.0:5000
 
 echo Running in $(pwd)
 
+#!/bin/bash
+
+# Function to check for git availability
+check_git_installed() {
+  if ! command -v git &> /dev/null
+  then
+    echo "Error: Git is not installed."
+    exit 1
+  fi
+}
+
+# Check if the current directory has a .git folder and is a valid Git repository
+if [ -d ".git" ]; then
+   check_git_installed
+
+   echo "Git repository found. Performing 'git pull'..."
+   git pull --no-edit || { 
+   echo "Error: Failed to perform 'git pull'. Please resolve the conflicts manually."
+   exit 1
+   }
+else
+   echo "Current directory is not a valid Git repository."
+fi
+
+
 echo Starting Camera Uploader...
 /usr/bin/python3 /opt/dashy/dashy.py > /opt/dashy/dashy.log 2>&1 &
 
