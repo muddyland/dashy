@@ -104,7 +104,7 @@ def manifest():
 @app.route('/api/hass')
 def hass_api():
     cam = Camera(config)
-    return jsonify({"status" : cam.check_camera_connection(return_as_string=True)})
+    return jsonify({"status" : cam.check_camera_connection()})
 
 @app.route('/api/hass/locked')
 def hass_api_locked():
