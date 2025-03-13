@@ -83,22 +83,5 @@
     <div class="spinner-overlay">
         <div class="spinner"></div>
     </div>
-    <script>
-        $(document).ready(function() {
-            $('.spinner-overlay').hide(); // Hide the spinner initially
-
-            $(document).ajaxStart(function() {
-                // Show the spinner when an AJAX request is sent
-                $('.spinner-overlay').show();
-            });
-
-            $(document).ajaxStop(function() {
-                // Hide the spinner when all AJAX requests have completed
-                $('.spinner-overlay').hide();
-            });
-
-            // You can further customize this to handle page loading events if not relying on AJAX
-        });
-    </script>
 </body>
 </html>
