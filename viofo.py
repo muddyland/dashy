@@ -1,5 +1,4 @@
 import os, sys
-from datetime import datetime
 from bs4 import BeautifulSoup
 import requests
 import json
@@ -10,6 +9,31 @@ from dashy_config import Config
 import os, sys, shutil
 import tempfile
 import subprocess
+from functools import lru_cache, wraps
+from datetime import datetime, timedelta
+
+def timed_lru_cache(seconds: int, maxsize: int = None):
+
+    def wrapper_cache(func):
+        func = lru_cache(maxsize=maxsize)(func)
+        func.lifetime = timedelta(seconds=seconds)
+        func.expiration = datetime.now() + func.lifetime
+
+        @wraps(func)
+        def wrapped_func(*args, **kwargs):
+            print('Checking Camera Status')
+            if datetime.now() >= func.expiration:
+                print('Connection cache expired, rechecking')
+                func.cache_clear()
+                func.expiration = datetime.now() + func.lifetime
+            else:
+                print(f"Using camera status cache, will recheck at {func.expiration}")
+
+            return func(*args, **kwargs)
+
+        return wrapped_func
+
+    return wrapper_cache
 
 class Camera:
     def __init__(self, config):
@@ -25,31 +49,26 @@ class Camera:
         self.cam_wifi_ip = config_data.get("cam_wifi_ip", None)
         self.cam_model = config_data.get('cam_model', "A129-Plus")
         
-        self.check_camera_connection()
-        if self.connected:
-            # Camera HTTP path
-            self.base_url = f"http://{self.connected_ip}:80"
-        else:
-            self.base_url = None
-        
-        
-        
+    @timed_lru_cache(30)    
     def check_camera_connection(self, return_as_string=False):
         result = None
         if self.cam_wifi_ip:
             # Check to see if port 80 is open on this IP 
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
+                s.settimeout(5)
                 result = s.connect_ex((self.cam_wifi_ip, 80))
                 
         
         if result != 0:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
+                s.settimeout(5)
                 result = s.connect_ex((self.cam_ip, 80))
         else:
             self.connected_ip = self.cam_wifi_ip
             self.connected = True
+
+            self.base_url = f"http://{self.connected_ip}:80"
+
             self.result = result
             if return_as_string:
                 return "connected"
@@ -60,6 +79,9 @@ class Camera:
         if result == 0:
             self.connected_ip = self.cam_ip
             self.connected = True
+            
+            self.base_url = f"http://{self.connected_ip}:80"
+            
             self.result = result
             if return_as_string:
                 return "connected"
@@ -68,6 +90,9 @@ class Camera:
         else:
             self.connected = False
             self.connected_ip = None
+            
+            self.base_url = None
+            
             self.result = result
             if return_as_string:
                 return "disconnected"

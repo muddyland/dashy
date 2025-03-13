@@ -8,6 +8,8 @@ import json
 import pytz
 import requests_cache
 import socket
+import threading
+import time
 from viofo import Camera, Downloads, DownloadsDB
 from dashy_config import Config
 global config
@@ -16,6 +18,18 @@ global config_json
 config_json = config.config_data
 
 app = Flask(__name__, static_url_path='/static', static_folder='./static')
+
+cam = Camera(config)
+def loop_camera_check():
+    # Cache the cam check to save on time 
+    while True:
+        app.logger.info('Background cam check running!')
+        cam.check_camera_connection(return_as_string=True)
+        cam.check_camera_connection(return_as_string=False)
+        time.sleep(30)
+
+cam_check = threading.Thread(target=loop_camera_check)
+cam_check.start()
 
 def get_max(a, b):
     return max(a, b)
@@ -34,7 +48,6 @@ downloads = Downloads(config)
 
 @app.route('/stream')
 def stream_video():
-    cam = Camera(config)
     return Response(cam.generate_video_frames(), mimetype='video/mp4')
 
 @app.route('/storage/grab')
@@ -49,7 +62,6 @@ def upload_file():
 
 def get_video_files():
     video_files = []
-    cam = Camera(config)
     for file_name in os.listdir(f"{config_json['video_path']}/locked"):
         video_files.append(cam.parse_filename(file_name))
     if video_files:
@@ -70,8 +82,6 @@ if config_json.get("no_proxy", False):
 
 @app.route('/')
 def index():
-    cam = Camera(config)
-    print(cam.result)
     cam_proxy = "http://" + str(str(request.host).split(":")[0])
     video_files = get_video_files()
      # Pagination implementation
@@ -103,7 +113,6 @@ def manifest():
 
 @app.route('/api/hass')
 def hass_api():
-    cam = Camera(config)
     return jsonify({"status" : cam.check_camera_connection()})
 
 @app.route('/api/hass/locked')
@@ -136,12 +145,12 @@ def api_queue():
 @app.route('/api/storage/delete', methods=['DELETE'])
 def delete_file():
     data = request.get_json()
-    print(data)
+    app.logger.info(data)
     if not data or 'filename' not in data:
         return jsonify({"error": "Invalid request. Please provide JSON data with 'filename' key."}), 400
 
     filename = data['filename']
-    print(filename)
+    app.logger.info(filename)
     file_path = os.path.join(config_json['video_path'], filename)
 
     if os.path.exists(file_path):
@@ -153,7 +162,6 @@ def delete_file():
 
 @app.route('/storage/locked')
 def list_files():
-    cam = Camera(config)
     video_files = get_video_files()
      # Pagination implementation
     per_page = 14  # Number of items per page
@@ -187,7 +195,6 @@ def list_all_cam_files():
             mode = "parking"
         else:
             mode = "driving"
-        cam = Camera(config)
         video_files = cam.scrape_webserver(mode=mode, locked=False)
         # Pagination implementation
         per_page = 14  # Number of items per page
@@ -225,7 +232,6 @@ def list_cam_files():
             mode = "parking"
         else:
             mode = "driving"
-        cam = Camera(config)
         video_files = cam.scrape_webserver(mode=mode, locked=True)
         # Pagination implementation
         per_page = 14  # Number of items per page
