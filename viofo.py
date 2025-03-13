@@ -39,11 +39,13 @@ class Camera:
         if self.cam_wifi_ip:
             # Check to see if port 80 is open on this IP 
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
                 result = s.connect_ex((self.cam_wifi_ip, 80))
                 
         
         if result != 0:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
                 result = s.connect_ex((self.cam_ip, 80))
         else:
             self.connected_ip = self.cam_wifi_ip
