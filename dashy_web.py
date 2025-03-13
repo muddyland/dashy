@@ -49,8 +49,8 @@ def upload_file():
 
 def get_video_files():
     video_files = []
+    cam = Camera(config)
     for file_name in os.listdir(f"{config_json['video_path']}/locked"):
-        cam = Camera(config)
         video_files.append(cam.parse_filename(file_name))
     if video_files:
         return sorted(video_files, key=lambda x: x['created_date'], reverse=True)
