@@ -2,6 +2,7 @@
 config.json
 manual_downloads.json
 videos/locked/*
+videos/tumbnails/*
 videos/downloads.json
 videos/downloads_queue.json
 .download-in-progress
