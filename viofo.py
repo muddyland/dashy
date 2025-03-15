@@ -170,7 +170,7 @@ class Camera:
             full_time = date_name_split[2]
             created_date = datetime.strptime(f"{year}{month_day}{full_time}", '%Y%m%d%H%M%S')
             created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
-            if "R" in file_name.split(".")[0].split("_")[1]:
+            if "R" in file_name.split(".")[0].split("_")[3]:
                 location = "Rear"
                 number = file_name.split(".")[0].split("_")[3]
             elif "F" in file_name.split(".")[0].split("_")[3]:
