@@ -36,7 +36,7 @@ def timed_lru_cache(seconds: int, maxsize: int = None):
     return wrapper_cache
 
 class Camera:
-    def __init__(self, config):
+    def __init__(self, config, check_connection=False):
         if not isinstance(config, Config):
             raise Exception("You must pass the config as a Config class")
         
@@ -48,6 +48,9 @@ class Camera:
         self.cam_ip = config_data.get("cam_ip", "192.168.1.254")
         self.cam_wifi_ip = config_data.get("cam_wifi_ip", None)
         self.cam_model = config_data.get('cam_model', "A129-Plus")
+        
+        if check_connection:
+            self.check_camera_connection()
         
     @timed_lru_cache(30)    
     def check_camera_connection(self, return_as_string=False):
@@ -273,7 +276,7 @@ class Downloads:
             try:
                 # If there is no base_url, easy enough to grab it from the camera
                 if not self.base_url:
-                    cam = Camera(self.config)
+                    cam = Camera(self.config, check_connection=True)
                     if not cam.connected:
                         raise Exception("Camera is not connected, impossible to download")
                     self.base_url = cam.base_url

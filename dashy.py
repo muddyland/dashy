@@ -87,5 +87,5 @@ if __name__ == "__main__":
               print(f"Error downloading files: {str(e)}")
         else:
             print("Camera not connected.")
-        # Wait for 5 minutes before checking again
-        time.sleep(300)
+        # Wait for 2 minutes before checking again
+        time.sleep(120)
