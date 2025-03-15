@@ -263,7 +263,7 @@ class Downloads:
         except subprocess.CalledProcessError as e:
             print(f"Error generating thumbnail: {e}")
     
-    def download_video(self):
+    def download_video(self, cam=None):
         downloaded_files = self.db.load_downloaded_files()
         # Get Queue from file
         file_urls = self.db.load_download_queue()
@@ -283,6 +283,11 @@ class Downloads:
                 
                 self.start_download_lock()
                 for file_url in file_urls:
+                    if cam and isinstance(cam, Camera):
+                        status = cam.check_camera_connection()
+                        if not status:
+                            raise Exception("Connection to camera has been lost")
+                        
                     file_name = file_url.split('/')[-1]
                     file_path = f'{self.download_path}/{file_name}'
                     

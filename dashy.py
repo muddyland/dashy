@@ -78,8 +78,8 @@ if __name__ == "__main__":
                 download_parking_files(cam)
                 print("Locked Parking Mode Clips have been added to the queue (if any)")
               
-              # Download all files from queue
-              downloads.download_video()
+              # Download all files from queue, pass camera to downloader for connection checks
+              downloads.download_video(cam=cam)
               time.sleep(10)
               find_missing_thumbnails()
               
