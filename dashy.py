@@ -82,10 +82,10 @@ if __name__ == "__main__":
               downloads.download_video(cam=cam)
               time.sleep(10)
               find_missing_thumbnails()
-              
+              time.sleep(300)
             except Exception as e:
               print(f"Error downloading files: {str(e)}")
         else:
             print("Camera not connected.")
-        # Wait for 2 minutes before checking again
-        time.sleep(120)
+            # Wait for 2 minutes before checking again
+            time.sleep(60)
