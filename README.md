@@ -6,7 +6,9 @@ Dashy is a set of tools to aid in the ingestion, and consumption of Viofo Dashca
 When you pull into the driveway, enable WiFi, and your locked videos will automatically be uploaded to a storage path of your choice (even NFS). Dashy will create thumbnails, and make the downloaded files avalible in a nice Web UI.
 
 Dashy also proxies connections to your dashcam, allowing you to view all clips on the camera, and choose to download those files as well! The idea is to be flexible.
-This is a work in progress, but I will be using it for my personal Dashcam, please keep this in mind,,,
+This is a work in progress, but I will be using it for my personal Dashcam, please keep this in mind...
+
+![Dashy Screenshot](screenshot.png)
 
 ## Assumptions before installing
 
