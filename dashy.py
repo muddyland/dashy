@@ -26,7 +26,7 @@ def download_files(cam):
 # Function to download files from the server
 def download_parking_files(cam):
     downloads = DownloadsDB(config)
-    files = cam.scrape_webserver(mode="driving", locked=True)
+    files = cam.scrape_webserver(mode="parking", locked=True)
 
     if not files:
         print("No locked parking video files found.")
