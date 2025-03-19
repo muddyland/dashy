@@ -109,13 +109,13 @@ class Camera:
         # Open Downloads DB to tag a video as downloaded
         downloads = DownloadsDB(self.config)
         
-        if mode == "parking" and not locked:
+        if mode == "parking" and locked:
             file_dir = "/DCIM/Parking/RO"
-        elif mode == "driving" and not locked:
-            file_dir = "/DCIM/Movie"
         elif mode == "driving" and locked:
             file_dir = "/DCIM/Movie/RO"
-        elif mode == "parking" and locked:
+        elif mode == "driving" and not locked:
+            file_dir = "/DCIM/Movie"
+        elif mode == "parking" and not locked:
             file_dir = "/DCIM/Movie/Parking"
         
         response = requests.get(self.base_url + file_dir, timeout=180)
@@ -138,8 +138,10 @@ class Camera:
                 return sorted(file_urls, key=lambda x: x['created_date'], reverse=True)
             else:
                 return []
+        elif response.status_code == 404:
+            raise Exception(f"Camera does not have any video files in: {file_dir}, are you sure there are any files here?")
         else:
-            return Exception("Failed to connect to camera")
+            raise Exception(f"Camera did not return expected status code 200: {response.status_code} - {response.text}")
         
     def parse_filename(self, file_name):
         if self.cam_model == "A129-Plus":
