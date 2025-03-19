@@ -12,7 +12,7 @@ config_json = config.config_data
 app = Flask(__name__, static_url_path='/static', static_folder='./static')
 
 global cam
-cam = Camera(config)
+cam = Camera(config, check_connection=True)
 
 def loop_camera_check():
     # Cache the cam check to save on time 
@@ -253,7 +253,8 @@ def list_cam_files():
     except Exception as e:
         return render_template('list_cam_files.html', video_files=[], error=f"Exception: {e}")
 
+cam_check = threading.Thread(target=loop_camera_check)
+cam_check.start()
+
 if __name__ == '__main__':
-    cam_check = threading.Thread(target=loop_camera_check)
-    cam_check.start()
     app.run(debug=True, host="0.0.0.0")
