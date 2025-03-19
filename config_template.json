@@ -1,7 +1,8 @@
 {
-    "cam_ssid" : "SSID_HERE",
-    "cam_ip" : "192.168.1.254",
-    "video_path" : "./videos",
-    "download_parking" : true, //Download Locked parking files
-    "download_locked" : true, //Download Locked parking files
+    "cam_ip" : "192.168.1.254", // IP of the camera, in case it is differnt. Both the A129-Plus and A229-Plus use this IP, from my testing
+    "cam_wifi_ip" : "10.x.x.x", // IP of the cam on your WiFi network, currently only the A229-Plus does this, dashy will preffer this IP over AP mode
+    "cam_model" : "A229-Plus", // or A129-Plus, others may work, but the file names may not be the same
+    "video_path" : "videos", // Path where to save videos/thumbnails
+    "download_parking" : true, // Download Parking Mode clips
+    "download_locked" : true // Download Driving Mode clips
 }

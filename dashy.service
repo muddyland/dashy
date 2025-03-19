@@ -1,0 +1,18 @@
+[Unit]
+Description=Dashy Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/dashy/start.sh
+Restart=always
+User=pi
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/opt/dashy
+Restart=always
+RestartSec=3
+StartLimitInterval=60s
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

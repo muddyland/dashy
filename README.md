@@ -52,45 +52,51 @@ $ cd /opt/dashy
 
 * Make sure the server_name matches your domain or IP address
 * Make sure your camera IP matches the expected 192.168.1.245 (default on most Viofo Cams)
+* Make sure the storage location 'alias' is the correct for video and thumbnail folders, if you are not using the default 
 ```bash
 $ sudo nano /etc/nginx/sites-enabled/dashy.conf 
 ```
-7. Remove Default Nginx config
+* NOTE: SSL can be added to the above config, though it is not required to use Dashy locally. I would suggest if you have a domain, use SSL. There are plenty of guides on adding SSL to an Nginx proxy, this is all we have here, you can follow those guides, though I do not reccomend publicly exposing Dashy, and instead keep it internal and use DNS to verify your letsencrypt cert. 
+
+
+1. Remove Default Nginx config
 ```bash
 $ sudo rm /etc/nginx/sites-enabled/default
 ```
-8. Copy and modify config
+1. Copy and modify config
 Make sure to change the following:
-* Ensure to set the SSID correctly!
-* If you do not want parking clips, you can toggle that by setting "false"
-* Same for Driving clips, you can disable with "false"
-* The cam IP could be differnt, try without changing it first
-* Set Video path to the path where you would like the videos and thumbnails to be stored.
-* If NFS or SMB, just ensure they are mounted
-* Ensure the user has permissions to write to and create folders in this path
+```json
+{
+    "cam_ip" : "192.168.1.254", // IP of the camera, in case it is differnt. Both the A129-Plus and A229-Plus use this IP, from my testing
+    "cam_wifi_ip" : "10.x.x.x", // IP of the cam on your WiFi network, currently only the A229-Plus does this, dashy will preffer this IP over AP mode
+    "cam_model" : "A229-Plus", // or A129-Plus, others may work, but the file names may not be the same
+    "video_path" : "videos", // Path where to save videos/thumbnails
+    "download_parking" : true, // Download Parking Mode clips
+    "download_locked" : true // Download Driving Mode clips
+}
+```
 
 ```bash
 $ cp config_template.json config.json
 $ nano config.json 
 ```
 
-9. Enable Dashy service - Ensure the user in the service matches your user! (pi by default)
+1. Enable Dashy service - Ensure the user in the service matches your user! (pi by default)
 ```bash
 $ sudo cp dashy.service /etc/systemd/system/dashy.service
 $ sudo systemctl enable dashy.service
 $ sudo systemctl start dashy 
 ```
 
-10. Turn on your Dashcam WiFi, ensure Dashy connects and shows you video!
+1.  Turn on your Dashcam WiFi, ensure Dashy connects to the camera (top right of UI)!
 * The Web UI can be accessed via (port 80):
 ```
 http://{your_dashy_ip_or_hostname_here}/
 ```
-* Your camera can be accessed via (port 8080):
+* Your camera can be accessed via (port 8080) to directly view videos:
 ```
 http://{your_dashy_ip_or_hostname}:8080/
 ```
-
 
 ## Plans for this repo
 This repo is for me to play around with, at this time, I am not sure what I am going to do with it. But it is being built around my use-cases, please keep this in mind. 
