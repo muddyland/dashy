@@ -110,7 +110,7 @@ class Camera:
         downloads = DownloadsDB(self.config)
         
         if mode == "parking" and locked:
-            file_dir = "/DCIM/Parking/RO"
+            file_dir = "/DCIM/Movie/Parking/RO"
         elif mode == "driving" and locked:
             file_dir = "/DCIM/Movie/RO"
         elif mode == "driving" and not locked:
