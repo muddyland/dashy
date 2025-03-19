@@ -11,6 +11,7 @@ config_json = config.config_data
 
 app = Flask(__name__, static_url_path='/static', static_folder='./static')
 
+global cam
 cam = Camera(config)
 
 def loop_camera_check():

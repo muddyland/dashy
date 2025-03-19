@@ -64,15 +64,23 @@ if __name__ == "__main__":
             print("Camera connected.")
             try:
               # Append Locked driving mode videos
-              print("Checking for Locked clips...")
+              
               if config_json.get('download_locked', False):
-                download_files(cam)
-                print("Locked Driving Mode Clips have been added to the queue (if any)")
+                try:
+                    print("Checking for Locked Driving Mode clips...")
+                    download_files(cam)
+                    print("Locked Driving Mode Clips have been added to the queue (if any)")
+                except Exception as e:
+                    print(f"Error adding files to queue: {str(e)}")
                 
               # Append parking mode files to downloads list
               if config_json.get('download_parking', False):
-                download_parking_files(cam)
-                print("Locked Parking Mode Clips have been added to the queue (if any)")
+                try:
+                    print("Checking for Locked Parking Mode clips...")
+                    download_parking_files(cam)
+                    print("Locked Parking Mode Clips have been added to the queue (if any)")
+                except Exception as e:
+                    print(f"Error adding files to queue: {str(e)}")
               
               # Download all files from queue, pass camera to downloader for connection checks
               downloads.download_video(cam=cam)
@@ -81,6 +89,7 @@ if __name__ == "__main__":
               time.sleep(300)
             except Exception as e:
               print(f"Error downloading files: {str(e)}")
+              time.sleep(300)
         else:
             print("Camera not connected.")
             # Wait for 2 minutes before checking again
