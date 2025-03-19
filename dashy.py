@@ -58,8 +58,8 @@ if __name__ == "__main__":
         
     downloads = Downloads(config)
     while True:
-        cam = Camera(config)
-        if cam.check_camera_connection():
+        cam = Camera(config, check_connection=True)
+        if cam.connected:
             downloads.stop_download_lock()
             print("Camera connected.")
             try:

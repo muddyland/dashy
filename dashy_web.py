@@ -12,12 +12,12 @@ config_json = config.config_data
 app = Flask(__name__, static_url_path='/static', static_folder='./static')
 
 cam = Camera(config)
+
 def loop_camera_check():
     # Cache the cam check to save on time 
     while True:
         app.logger.info('Background cam check running!')
         cam.check_camera_connection(return_as_string=True)
-        cam.check_camera_connection(return_as_string=False)
         time.sleep(30)
 
 def get_max(a, b):
@@ -79,7 +79,7 @@ def index():
     start_idx = (page - 1) * per_page
     end_idx = min(page * per_page, len(video_files))
     video_files_paginated = video_files[start_idx:end_idx]
-    return render_template('index.html', cam_status=cam.check_camera_connection(return_as_string=True), hostname=cam_proxy, cam_proxy=str(str(request.host).split(":")[0]) + ":8080", video_files=video_files_paginated)
+    return render_template('index.html', cam_status=cam.connected_string, hostname=cam_proxy, cam_proxy=str(str(request.host).split(":")[0]) + ":8080", video_files=video_files_paginated)
 
 @app.route('/manifest.json')
 def manifest():
@@ -102,7 +102,7 @@ def manifest():
 
 @app.route('/api/hass')
 def hass_api():
-    return jsonify({"status" : cam.check_camera_connection()})
+    return jsonify({"status" : cam.connected})
 
 @app.route('/api/hass/locked')
 def hass_api_locked():
@@ -133,6 +133,7 @@ def api_queue():
 
 @app.route('/api/storage/delete', methods=['DELETE'])
 def delete_file():
+    downloads = Downloads(config)
     data = request.get_json()
     app.logger.info(data)
     if not data or 'filename' not in data:
@@ -140,7 +141,7 @@ def delete_file():
 
     filename = data['filename']
     app.logger.info(filename)
-    file_path = os.path.join(f"{config_json['video_path']}/locked", filename)
+    file_path = os.path.join(downloads.download_path, filename)
 
     if os.path.exists(file_path):
         os.remove(file_path)
@@ -172,7 +173,7 @@ def list_files():
                             total_items=total_items,
                             per_page=per_page,
                             page=page,
-                            cam_status=cam.check_camera_connection(return_as_string=True),
+                            cam_status=cam.connected_string,
                             cam_proxy=str(str(request.host).split(":")[0]) + ":8080"
                         )
 
@@ -206,7 +207,7 @@ def list_all_cam_files():
                                total_items=total_items,
                                per_page=per_page,
                                page=page,
-                               cam_status=cam.check_camera_connection(return_as_string=True),
+                               cam_status=cam.connected_string,
                                cam_proxy=str(str(request.host).split(":")[0]) + ":8080",
                                parking=parking
                             )
@@ -244,7 +245,7 @@ def list_cam_files():
                                total_items=total_items,
                                per_page=per_page,
                                page=page,
-                               cam_status=cam.check_camera_connection(return_as_string=True),
+                               cam_status=cam.connected_string,
                                cam_proxy=str(str(request.host).split(":")[0]) + ":8080",
                                parking=parking
                             )

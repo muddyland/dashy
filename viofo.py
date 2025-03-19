@@ -44,59 +44,40 @@ class Camera:
         self.cam_ip = config_data.get("cam_ip", "192.168.1.254")
         self.cam_wifi_ip = config_data.get("cam_wifi_ip", None)
         self.cam_model = config_data.get('cam_model', "A129-Plus")
-        
+        self.cam_ip_list = [self.cam_ip, self.cam_wifi_ip] if self.cam_wifi_ip and isinstance(self.cam_wifi_ip, str) else [self.cam_ip]
         if check_connection:
             self.check_camera_connection()
         
     @timed_lru_cache(30)    
     def check_camera_connection(self, return_as_string=False):
         result = None
-        if self.cam_wifi_ip:
-            # Check to see if port 80 is open on this IP 
+        
+        for ip in self.cam_ip_list:
+            # Check to see if port 80 is open on wifi IP first
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(2)
                 result = s.connect_ex((self.cam_wifi_ip, 80))
                 
         
-        if result != 0:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2)
-                result = s.connect_ex((self.cam_ip, 80))
+            if result == 0:
+                self.connected_ip = self.cam_wifi_ip
+                self.connected = True
+                self.connected_string = "connected"
+                self.base_url = f"http://{self.connected_ip}:80"
+                self.result = result
+                break
+            else:
+                self.connected = False
+                self.connected_ip = None
+                self.connected_string = "disconnected"
+                self.base_url = None
+                self.result = result
+            
+            
+        if return_as_string:
+            return self.connected_string
         else:
-            self.connected_ip = self.cam_wifi_ip
-            self.connected = True
-
-            self.base_url = f"http://{self.connected_ip}:80"
-
-            self.result = result
-            if return_as_string:
-                return "connected"
-            else:
-                return True
-        
-
-        if result == 0:
-            self.connected_ip = self.cam_ip
-            self.connected = True
-            
-            self.base_url = f"http://{self.connected_ip}:80"
-            
-            self.result = result
-            if return_as_string:
-                return "connected"
-            else:
-                return True
-        else:
-            self.connected = False
-            self.connected_ip = None
-            
-            self.base_url = None
-            
-            self.result = result
-            if return_as_string:
-                return "disconnected"
-            else:
-                return False
+            return self.connected
         
     def scrape_webserver(self, mode="driving", locked=True):
         if not self.connected or not self.base_url:
