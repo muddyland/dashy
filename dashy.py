@@ -1,9 +1,5 @@
-import os, sys
-import requests
+import os
 import time
-from bs4 import BeautifulSoup
-import json
-import subprocess
 from viofo import Camera, Downloads, DownloadsDB
 from dashy_config import Config
 global config

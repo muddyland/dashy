@@ -1,13 +1,5 @@
-import os, sys
+import os
 from flask import Flask, render_template, request, Response, jsonify
-from datetime import datetime
-from bs4 import BeautifulSoup
-import requests 
-import subprocess
-import json
-import pytz
-import requests_cache
-import socket
 import threading
 import time
 from viofo import Camera, Downloads, DownloadsDB
@@ -27,9 +19,6 @@ def loop_camera_check():
         cam.check_camera_connection(return_as_string=True)
         cam.check_camera_connection(return_as_string=False)
         time.sleep(30)
-
-cam_check = threading.Thread(target=loop_camera_check)
-cam_check.start()
 
 def get_max(a, b):
     return max(a, b)
@@ -151,7 +140,7 @@ def delete_file():
 
     filename = data['filename']
     app.logger.info(filename)
-    file_path = os.path.join(config_json['video_path'], filename)
+    file_path = os.path.join(f"{config_json['video_path']}/locked", filename)
 
     if os.path.exists(file_path):
         os.remove(file_path)
@@ -263,5 +252,6 @@ def list_cam_files():
         return render_template('list_cam_files.html', video_files=[], error=f"Exception: {e}")
 
 if __name__ == '__main__':
-    # Example of how to use the function
+    cam_check = threading.Thread(target=loop_camera_check)
+    cam_check.start()
     app.run(debug=True, host="0.0.0.0")

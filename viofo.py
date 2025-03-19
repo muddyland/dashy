@@ -2,12 +2,8 @@ import os, sys
 from bs4 import BeautifulSoup
 import requests
 import json
-import pytz
-import requests_cache
 import socket
 from dashy_config import Config
-import os, sys, shutil
-import tempfile
 import subprocess
 from functools import lru_cache, wraps
 from datetime import datetime, timedelta
