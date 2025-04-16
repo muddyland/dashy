@@ -53,6 +53,7 @@ class Camera:
         result = None
         
         for ip in self.cam_ip_list:
+            print(f"Checking camera IP {ip}")
             # Check to see if port 80 is open on wifi IP first
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(2)
@@ -72,8 +73,9 @@ class Camera:
                 self.connected_string = "disconnected"
                 self.base_url = None
                 self.result = result
-            
-            
+                
+        print(f"Camera {self.connected_string} from IP {self.connected_ip}")
+        
         if return_as_string:
             return self.connected_string
         else:
