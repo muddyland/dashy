@@ -53,18 +53,18 @@ class Camera:
         result = None
         
         for ip in self.cam_ip_list:
-            print(f"Checking camera IP {ip}")
+            print(f"Checking {self.cam_model} IP {ip}")
             # Check to see if port 80 is open on wifi IP first
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(2)
-                result = s.connect_ex((self.cam_wifi_ip, 80))
+                result = s.connect_ex((ip, 80))
                 
         
             if result == 0:
-                self.connected_ip = self.cam_wifi_ip
+                self.connected_ip = ip
                 self.connected = True
                 self.connected_string = "connected"
-                self.base_url = f"http://{self.connected_ip}:80"
+                self.base_url = f"http://{ip}:80"
                 self.result = result
                 break
             else:
@@ -74,7 +74,7 @@ class Camera:
                 self.base_url = None
                 self.result = result
                 
-        print(f"Camera {self.connected_string} from IP {self.connected_ip}")
+        print(f"{self.cam_model} {self.connected_string} from IP {self.connected_ip}")
         
         if return_as_string:
             return self.connected_string
