@@ -60,9 +60,6 @@ if __name__ == "__main__":
     
     # Path to save video to 
     video_path = f"{config_json['video_path']}/locked"
-    if not os.path.exists(video_path):
-        logger.warning(f"Path {video_path} doesn't exist, creating it...")
-        os.makedirs(video_path)
         
     downloads = Downloads(config)
     while True:
