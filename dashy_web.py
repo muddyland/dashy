@@ -174,7 +174,7 @@ def list_files():
     has_next = end_idx < len(video_files)
     total_items = len(video_files)
 
-    hostname = "http://" + str(str(request.host).split(":")[0]) + ":80"
+    hostname = "http://" + str(str(request.host).split(":")[0])
     return render_template('list_files.html', 
                             video_files=video_files_paginated, 
                             hostname=hostname, proxy_port=config_json.get("dashy_proxy_port", 80),
@@ -208,7 +208,7 @@ def list_all_cam_files():
         has_next = end_idx < len(video_files)
         total_items = len(video_files)
 
-        hostname = "http://" + str(str(request.host).split(":")[0]) + ":8080"
+        hostname = "http://" + str(str(request.host).split(":")[0]) + config_json.get("cam_proxy_port", 8080)
         return render_template('list_cam_files.html', 
                                video_files=video_files_paginated, 
                                hostname=hostname,
@@ -247,7 +247,7 @@ def list_cam_files():
         has_next = end_idx < len(video_files)
         total_items = len(video_files)
 
-        hostname = "http://" + str(str(request.host).split(":")[0]) + ":8080"
+        hostname = "http://" + str(str(request.host).split(":")[0]) + config_json.get("cam_proxy_port", 8080)
         return render_template('list_cam_files.html', 
                                video_files=video_files_paginated, 
                                hostname=hostname,

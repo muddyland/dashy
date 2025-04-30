@@ -76,7 +76,7 @@
                         });
                     </script>
                     <video id="{{ video_file.filename }}_vid" width="100%" controls="false" preload="metadata">
-                        <source src="{{ hostname }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
+                        <source src="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
                 </div>
@@ -93,7 +93,7 @@
                                         <button type="button" id="'grab-local-{{ video_file.number }}"class="btn btn-primary" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
                                             <i class="fas fa-cloud-download-alt"></i> Local
                                         </button>
-                                        <a class="btn btn-success" href="{{ hostname }}{{ video_file.dir }}/{{ video_file.filename }}" download>
+                                        <a class="btn btn-success" href="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" download>
                                             <i class="fa fa-save"></i> Download
                                         </a>
                                         {% elif video_file.in_queue %}
