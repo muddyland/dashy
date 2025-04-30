@@ -1,7 +1,16 @@
 server {
+        {% if ssl_enabled %}
+        listen 443 ssl default_server;
+        {% else %}
         listen 80 default_server;
+        {% endif %}
 
         server_name _;
+
+        {% if ssl_enabled %}
+        ssl_certificate {{ ssl_cert_path }};
+        ssl_certificate_key {{ ssl_key_path }};
+        {% endif %}
 
         location / {
                 proxy_pass http://localhost:5000;
@@ -24,7 +33,12 @@ server {
         }
 }
 server {
-    listen {{cam_proxy_port}} default_server;
+    listen {{cam_proxy_port}} default_server{% if ssl_enabled %} ssl {% endif %};
+    {% if ssl_enabled %}
+    ssl_certificate {{ ssl_cert_path }};
+    ssl_certificate_key {{ ssl_key_path }};
+    {% endif %}
+    
     server_name _;
     location / {
                 proxy_pass http://{{ cam_ip }}:{{cam_port}};

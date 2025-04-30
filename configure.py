@@ -22,6 +22,18 @@ thumbnails_dir = os.environ.get('THUMBNAILS_DIR', f'{data_dir}/thumbnails')
 download_parking = bool(os.environ.get('DOWNLOAD_PARKING', True))
 # Download Locked mode clips 
 download_locked = bool(os.environ.get('DOWNLOAD_LOCKED', True))
+# SSL Enabled
+ssl_enabled = bool(os.environ.get('SSL_ENABLED', False))
+# SSL Cert Path
+ssl_cert_path = os.environ.get('SSL_CERT_PATH')
+# SSL Key Path
+ssl_key_path = os.environ.get('SSL_KEY_PATH')
+if ssl_enabled:
+    if not ssl_cert_path or not ssl_key_path:
+        raise ValueError("SSL is enabled but SSL certificate or key path is missing.")
+    # Check cert and key paths to make sure they are valid
+    if not os.path.isfile(ssl_cert_path) or not os.path.isfile(ssl_key_path):
+        raise ValueError("SSL certificate or key path is not a valid file.")
 
 # Check if the environment variables are set correctly
 if not all([cam_model, data_dir, locked_dir, thumbnails_dir]):
@@ -33,7 +45,7 @@ if __name__ == "__main__":
     template_env = jinja2.Environment(loader=template_loader)
     template = template_env.get_template('nginx-template.jinja2')
     # Render the template with data
-    rendered_content = template.render(cam_ip=cam_ip, cam_port=cam_port, cam_proxy_port=cam_proxy_port)
+    rendered_content = template.render(cam_ip=cam_ip, cam_port=cam_port, cam_proxy_port=cam_proxy_port, ssl_enabled=ssl_enabled, ssl_cert_path=ssl_cert_path, ssl_key_path=ssl_key_path)
     with open("/etc/nginx/sites-available/default", "w") as f:
         f.write(rendered_content)
     print("Nginx configuration file generated successfully.")
@@ -48,3 +60,34 @@ if __name__ == "__main__":
             "download_locked": download_locked
         }, f, indent=4)
     print("Configuration file generated successfully.")
+    
+    # Set owner recursivly as we are root\
+    os.chown("/dashy", 1000, 1000)
+    os.chmod("/dashy", 0o755)
+    print("Set dashy dir permissions successfully.")
+    
+    # Check to make sure the data_dir exists and is writable
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+    if not os.access(data_dir, os.W_OK):
+        # Set permissions for the data_dir
+        os.chmod(data_dir, 0o755)
+        os.chown(data_dir, 1000, 1000)
+        print("Set data dir permissions successfully.")
+        
+    # Check to make sure thumbnail and locked video directories exist and are writable
+    if not os.path.exists(thumbnails_dir):
+        os.makedirs(thumbnails_dir)
+    if not os.access(thumbnails_dir, os.W_OK):
+        # Set permissions for the thumbnails_dir
+        os.chmod(thumbnails_dir, 0o755)
+        os.chown(thumbnails_dir, 1000, 1000)
+        print("Permissions set for thumbnails directory.")
+        
+    if not os.path.exists(locked_dir):
+        os.makedirs(locked_dir)
+    if not os.access(locked_dir, os.W_OK):
+        # Set permissions for the locked_videos_dir
+        os.chmod(locked_dir, 0o755)
+        os.chown(locked_dir, 1000, 1000)
+        print("Permissions set for locked videos directory.")

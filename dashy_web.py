@@ -4,6 +4,14 @@ import threading
 import time
 from viofo import Camera, Downloads, DownloadsDB
 from dashy_config import Config
+import logging
+logger = logging.getLogger("[dashy_web.py]")
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(name)s - %(levelname)s - %(asctime)s -  %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
 global config
 config = Config("config.json")
 global config_json
@@ -17,7 +25,7 @@ cam = Camera(config, check_connection=True)
 def loop_camera_check():
     # Cache the cam check to save on time 
     while True:
-        app.logger.info('Background cam check running!')
+        logger.info('Background cam check running!')
         cam.check_camera_connection(return_as_string=True)
         time.sleep(30)
 
@@ -136,12 +144,12 @@ def api_queue():
 def delete_file():
     downloads = Downloads(config)
     data = request.get_json()
-    app.logger.info(data)
+    logger.info(data)
     if not data or 'filename' not in data:
         return jsonify({"error": "Invalid request. Please provide JSON data with 'filename' key."}), 400
 
     filename = data['filename']
-    app.logger.info(filename)
+    logger.info(filename)
     file_path = os.path.join(downloads.download_path, filename)
 
     if os.path.exists(file_path):

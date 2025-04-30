@@ -7,6 +7,13 @@ from dashy_config import Config
 import subprocess
 from functools import lru_cache, wraps
 from datetime import datetime, timedelta
+import logging
+logger = logging.getLogger("[viofo.py]")
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(name)s - %(levelname)s - %(asctime)s -  %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 def timed_lru_cache(seconds: int, maxsize: int = None):
 
@@ -17,13 +24,13 @@ def timed_lru_cache(seconds: int, maxsize: int = None):
 
         @wraps(func)
         def wrapped_func(*args, **kwargs):
-            print('Checking Camera Status')
+            logger.info('Checking Camera Status')
             if datetime.now() >= func.expiration:
-                print('Connection cache expired, rechecking')
+                logger.info('Connection cache expired, rechecking')
                 func.cache_clear()
                 func.expiration = datetime.now() + func.lifetime
             else:
-                print(f"Using camera status cache, will recheck at {func.expiration}")
+                logger.info(f"Using camera status cache, will recheck at {func.expiration}")
 
             return func(*args, **kwargs)
 
@@ -53,7 +60,7 @@ class Camera:
         result = None
         
         for ip in self.cam_ip_list:
-            print(f"Checking {self.cam_model} IP {ip}")
+            logger.info(f"Checking {self.cam_model} IP {ip}")
             # Check to see if port 80 is open on wifi IP first
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(2)
@@ -74,7 +81,7 @@ class Camera:
                 self.base_url = None
                 self.result = result
                 
-        print(f"{self.cam_model} {self.connected_string} from IP {self.connected_ip}")
+        logger.info(f"{self.cam_model} {self.connected_string} from IP {self.connected_ip}")
         
         if return_as_string:
             return self.connected_string
@@ -204,11 +211,11 @@ class Downloads:
         timeout = int(config_data.get('request_timeout', 900))
         
         if not os.path.exists(download_path):
-            print(f"Path {download_path} doesn't exist, creating it...")
+            logger.info(f"Path {download_path} doesn't exist, creating it...")
             os.makedirs(download_path)
             
         if not os.path.exists(thumbnail_path):
-            print(f"Path {thumbnail_path} doesn't exist, creating it...")
+            logger.info(f"Path {thumbnail_path} doesn't exist, creating it...")
             os.makedirs(thumbnail_path)
             
         self.config = config
@@ -225,12 +232,12 @@ class Downloads:
     def stop_download_lock(self):
         try:
             os.unlink(".download-in-progress")
-            print("Lockfile has been cleared")
+            logger.info("Lockfile has been cleared")
         except FileNotFoundError:
-            print("No lockfile to clear")
+            logger.warning("No lockfile to clear")
         
     def generate_preview(self, file_path, file_name):
-        print("Generating Thumbnail...")
+        logger.info("Generating Thumbnail...")
         if not os.path.isdir(f"{self.thumbnail_path}"):
             os.mkdir(f"{self.thumbnail_path}")
         thumbnail_name = file_name.replace(".MP4", "") + ".jpg"
@@ -240,16 +247,16 @@ class Downloads:
         try:
             cwd = os.path.dirname(os.path.realpath(__file__))
             subprocess.run(command, shell=True, check=True, cwd=cwd)
-            print("Thumbnail generated successfully using ffmpeg.")
+            logger.info("Thumbnail generated successfully using ffmpeg.")
         except subprocess.CalledProcessError as e:
-            print(f"Error generating thumbnail: {e}")
+            logger.error(f"Error generating thumbnail: {e}")
     
     def download_video(self, cam=None):
         downloaded_files = self.db.load_downloaded_files()
         # Get Queue from file
         file_urls = self.db.load_download_queue()
         if not file_urls:
-            print("No files to download... moving on!")
+            logger.info("No files to download... moving on!")
             return True
         else:
             if not os.path.exists(self.download_path):
@@ -275,14 +282,14 @@ class Downloads:
                     with requests.get(self.base_url + file_url, stream=True, timeout=self.timeout) as response:
                         if response.status_code == 200:
                             with open(file_path, "wb+") as temp_file:
-                                print(f"Downloading from URL: {self.base_url}{file_url} to {temp_file.name}")
+                                logger.info(f"Downloading from URL: {self.base_url}{file_url} to {temp_file.name}")
                                 for chunk in response.iter_content(chunk_size=2048):
                                     if chunk:
                                         temp_file.write(chunk)
 
-                                print(f"File successfully downloaded and moved to: {file_path}")
+                                logger.info(f"File successfully downloaded and moved to: {file_path}")
                         else:
-                            print("Failed to download file {} Status: {}".format(file_url, response.status_code))
+                            logger.error("Failed to download file {} Status: {}".format(file_url, response.status_code))
                             continue
                 
                     # Append file to downloaded_files list, keep track of the downloads
@@ -299,12 +306,12 @@ class Downloads:
                     
                 # Save the updated downloaded_files list to downloads.json
                 self.stop_download_lock()
-                print("Downloads complete!")
+                logger.info("Downloads complete!")
                 return True
 
             except:
                 e = sys.exc_info()
-                print(f"Exception while downloading: {e}")
+                logger.error(f"Exception while downloading: {e}")
                 return False
 class DownloadsDB:
     def __init__(self, config):
@@ -356,9 +363,9 @@ class DownloadsDB:
         if name not in downloaded_files:
             queue = DownloadsDB.load_download_queue(self)
             if name in queue:
-                print("Video already in queue")
+                logger.warning("Video already in queue")
             else:
-                print(f"Appending file {name} to downloads queue...")
+                logger.info(f"Appending file {name} to downloads queue...")
                 queue.append(name)
                 DownloadsDB.save_download_queue(self, queue)
                 
