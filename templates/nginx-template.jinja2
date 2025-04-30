@@ -1,5 +1,5 @@
 server {
-        listen {{ dashy_proxy_port }} default_server{% if ssl_enabled %}ssl{% endif %};
+        listen {{ dashy_proxy_port }} default_server {% if ssl_enabled %}ssl{% endif %};
 
         server_name _;
 
@@ -29,7 +29,7 @@ server {
         }
 }
 server {
-    listen {{cam_proxy_port}} default_server{% if ssl_enabled %} ssl {% endif %};
+    listen {{cam_proxy_port}} default_server {% if ssl_enabled %}ssl{% endif %};
     {% if ssl_enabled %}
     ssl_certificate {{ ssl_cert_path }};
     ssl_certificate_key {{ ssl_key_path }};
@@ -38,9 +38,9 @@ server {
     server_name _;
     location / {
                 {% if cam_wifi_ip %}
-                proxy_pass http://{{ cam_wifi_ip }}:{{cam_port}};
+                proxy_pass http://{{ cam_wifi_ip }}:{{ cam_port }};
                 {% else %}
-                proxy_pass http://{{ cam_ip }}:{{cam_port}};
+                proxy_pass http://{{ cam_ip }}:{{ cam_port }};
                 {% endif %}
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
