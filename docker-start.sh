@@ -42,4 +42,5 @@ while true; do
         echo "Web Server process died."
         exit 1
     fi
+    sleep 30
 done
