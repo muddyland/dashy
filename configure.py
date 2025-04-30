@@ -55,6 +55,7 @@ if __name__ == "__main__":
             "cam_ip": cam_ip,
             "cam_wifi_ip": cam_wifi_ip,
             "cam_model": cam_model,
+            "cam_proxy_port" : cam_proxy_port,
             "video_path": data_dir,
             "download_parking": download_parking,
             "download_locked": download_locked

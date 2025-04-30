@@ -88,7 +88,7 @@ def index():
     start_idx = (page - 1) * per_page
     end_idx = min(page * per_page, len(video_files))
     video_files_paginated = video_files[start_idx:end_idx]
-    return render_template('index.html', cam_status=cam.connected_string, hostname=cam_proxy, cam_proxy=str(str(request.host).split(":")[0]) + ":8080", video_files=video_files_paginated)
+    return render_template('index.html', cam_status=cam.connected_string, hostname=cam_proxy, cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}", video_files=video_files_paginated)
 
 @app.route('/manifest.json')
 def manifest():
@@ -183,7 +183,7 @@ def list_files():
                             per_page=per_page,
                             page=page,
                             cam_status=cam.connected_string,
-                            cam_proxy=str(str(request.host).split(":")[0]) + ":8080"
+                            cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}"
                         )
 
 @app.route('/cam/all')
@@ -217,7 +217,7 @@ def list_all_cam_files():
                                per_page=per_page,
                                page=page,
                                cam_status=cam.connected_string,
-                               cam_proxy=str(str(request.host).split(":")[0]) + ":8080",
+                               cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}",
                                parking=parking
                             )
     except Exception as e:
@@ -255,7 +255,7 @@ def list_cam_files():
                                per_page=per_page,
                                page=page,
                                cam_status=cam.connected_string,
-                               cam_proxy=str(str(request.host).split(":")[0]) + ":8080",
+                               cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}",
                                parking=parking
                             )
     except Exception as e:
