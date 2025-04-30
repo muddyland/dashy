@@ -88,7 +88,7 @@ def index():
     start_idx = (page - 1) * per_page
     end_idx = min(page * per_page, len(video_files))
     video_files_paginated = video_files[start_idx:end_idx]
-    return render_template('index.html', cam_status=cam.connected_string, hostname=cam_proxy, cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}", video_files=video_files_paginated)
+    return render_template('index.html', cam_status=cam.connected_string, hostname=cam_proxy, proxy_port=config_json.get("dashy_proxy_port", 80), cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}", video_files=video_files_paginated)
 
 @app.route('/manifest.json')
 def manifest():
@@ -177,7 +177,8 @@ def list_files():
     hostname = "http://" + str(str(request.host).split(":")[0]) + ":80"
     return render_template('list_files.html', 
                             video_files=video_files_paginated, 
-                            hostname=hostname, has_prev=has_prev, 
+                            hostname=hostname, proxy_port=config_json.get("dashy_proxy_port", 80),
+                            has_prev=has_prev, 
                             has_next=has_next,
                             total_items=total_items,
                             per_page=per_page,
@@ -211,6 +212,7 @@ def list_all_cam_files():
         return render_template('list_cam_files.html', 
                                video_files=video_files_paginated, 
                                hostname=hostname,
+                               proxy_port=config_json.get("dashy_proxy_port", 80),
                                has_prev=has_prev, 
                                has_next=has_next,
                                total_items=total_items,
@@ -248,7 +250,8 @@ def list_cam_files():
         hostname = "http://" + str(str(request.host).split(":")[0]) + ":8080"
         return render_template('list_cam_files.html', 
                                video_files=video_files_paginated, 
-                               hostname=hostname, 
+                               hostname=hostname,
+                               proxy_port=config_json.get("dashy_proxy_port", 80), 
                                has_prev=has_prev, 
                                has_next=has_next,
                                total_items=total_items,

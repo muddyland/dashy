@@ -209,14 +209,6 @@ class Downloads:
         download_path = f"{config_data['video_path']}/locked"
         thumbnail_path = f"{config_data['video_path']}/thumbnails"
         timeout = int(config_data.get('request_timeout', 900))
-        
-        if not os.path.exists(download_path):
-            logger.info(f"Path {download_path} doesn't exist, creating it...")
-            os.makedirs(download_path)
-            
-        if not os.path.exists(thumbnail_path):
-            logger.info(f"Path {thumbnail_path} doesn't exist, creating it...")
-            os.makedirs(thumbnail_path)
             
         self.config = config
         self.db = DownloadsDB(config)

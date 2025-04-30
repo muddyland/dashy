@@ -1,7 +1,10 @@
 import jinja2
 import os 
 import json 
-
+# Dashy Port
+dashy_proxy_port = os.environ.get('DASHY_PROXY_PORT', '80')
+# Dashy Port
+dashy_port = os.environ.get('DASHY_PORT', '5000')
 # Only works on machines that can connect or route to the default IP 
 cam_ip = os.environ.get('CAM_IP', '192.168.1.254')
 # Cam WiFi IP
@@ -45,13 +48,14 @@ if __name__ == "__main__":
     template_env = jinja2.Environment(loader=template_loader)
     template = template_env.get_template('nginx-template.jinja2')
     # Render the template with data
-    rendered_content = template.render(cam_ip=cam_ip, cam_port=cam_port, cam_proxy_port=cam_proxy_port, ssl_enabled=ssl_enabled, ssl_cert_path=ssl_cert_path, ssl_key_path=ssl_key_path)
+    rendered_content = template.render(dashy_port=dashy_port, dashy_proxy_port=dashy_proxy_port, cam_ip=cam_ip, cam_port=cam_port, cam_proxy_port=cam_proxy_port, ssl_enabled=ssl_enabled, ssl_cert_path=ssl_cert_path, ssl_key_path=ssl_key_path)
     with open("/etc/nginx/sites-available/default", "w") as f:
         f.write(rendered_content)
     print("Nginx configuration file generated successfully.")
     
     with open("/dashy/config.json", "w") as f:
         json.dump({
+            "proxy_port" : dashy_proxy_port,
             "cam_ip": cam_ip,
             "cam_wifi_ip": cam_wifi_ip,
             "cam_model": cam_model,
@@ -69,6 +73,7 @@ if __name__ == "__main__":
     
     # Check to make sure the data_dir exists and is writable
     if not os.path.exists(data_dir):
+        print("Data directory does not exist. Creating it...")
         os.makedirs(data_dir)
     if not os.access(data_dir, os.W_OK):
         # Set permissions for the data_dir
@@ -78,6 +83,7 @@ if __name__ == "__main__":
         
     # Check to make sure thumbnail and locked video directories exist and are writable
     if not os.path.exists(thumbnails_dir):
+        print("Thumbnails directory does not exist. Creating it...")
         os.makedirs(thumbnails_dir)
     if not os.access(thumbnails_dir, os.W_OK):
         # Set permissions for the thumbnails_dir
@@ -86,6 +92,7 @@ if __name__ == "__main__":
         print("Permissions set for thumbnails directory.")
         
     if not os.path.exists(locked_dir):
+        print("Locked videos directory does not exist. Creating it...")
         os.makedirs(locked_dir)
     if not os.access(locked_dir, os.W_OK):
         # Set permissions for the locked_videos_dir
