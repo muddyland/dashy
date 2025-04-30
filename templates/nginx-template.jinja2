@@ -1,0 +1,36 @@
+server {
+        listen 80 default_server;
+
+        server_name _;
+
+        location / {
+                proxy_pass http://localhost:5000;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+        }
+        location /locked {
+                alias /opt/dashy/videos/locked;
+                autoindex on;
+                autoindex_exact_size off;
+                autoindex_localtime on;
+        }
+        location /thumbnails {
+                alias /opt/dashy/videos/thumbnails;
+                autoindex on;
+                autoindex_exact_size off;
+                autoindex_localtime on;
+        }
+}
+server {
+    listen {{cam_proxy_port}} default_server;
+    server_name _;
+    location / {
+                proxy_pass http://{{ cam_ip }}:{{cam_port}};
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+        }
+}

@@ -1,0 +1,15 @@
+stages:
+  - build
+
+build:
+  stage: build
+  tags:
+  - saas-linux-small-amd64
+  image: docker:24.0.5
+  services:
+   - docker:24.0.5-dind
+  script:
+    - docker version
+    - echo "Building Docker image..."
+    - docker build --tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME .
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
