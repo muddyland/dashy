@@ -48,14 +48,25 @@ if __name__ == "__main__":
     template_env = jinja2.Environment(loader=template_loader)
     template = template_env.get_template('nginx-template.jinja2')
     # Render the template with data
-    rendered_content = template.render(dashy_port=dashy_port, dashy_proxy_port=dashy_proxy_port, cam_ip=cam_ip, cam_port=cam_port, cam_proxy_port=cam_proxy_port, ssl_enabled=ssl_enabled, ssl_cert_path=ssl_cert_path, ssl_key_path=ssl_key_path)
+    rendered_content = template.render(
+        dashy_port=dashy_port, 
+        dashy_proxy_port=dashy_proxy_port, 
+        cam_ip=cam_ip, 
+        cam_port=cam_port, 
+        cam_proxy_port=cam_proxy_port, 
+        ssl_enabled=ssl_enabled, 
+        ssl_cert_path=ssl_cert_path, 
+        ssl_key_path=ssl_key_path,
+        thumbnails_dir=thumbnails_dir,
+        locked_dir=locked_dir
+    )
     with open("/etc/nginx/sites-available/default", "w") as f:
         f.write(rendered_content)
     print("Nginx configuration file generated successfully.")
     
     with open("/dashy/config.json", "w") as f:
         json.dump({
-            "proxy_port" : dashy_proxy_port,
+            "dashy_proxy_port" : dashy_proxy_port,
             "cam_ip": cam_ip,
             "cam_wifi_ip": cam_wifi_ip,
             "cam_model": cam_model,
