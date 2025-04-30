@@ -14,6 +14,28 @@ formatter = logging.Formatter('%(name)s - %(levelname)s - %(asctime)s -  %(messa
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
+def timed_lru_cache(seconds: int, maxsize: int = None):
+
+    def wrapper_cache(func):
+        func = lru_cache(maxsize=maxsize)(func)
+        func.lifetime = timedelta(seconds=seconds)
+        func.expiration = datetime.now() + func.lifetime
+
+        @wraps(func)
+        def wrapped_func(*args, **kwargs):
+            logger.info('Checking Camera Status')
+            if datetime.now() >= func.expiration:
+                logger.info('Connection cache expired, rechecking')
+                func.cache_clear()
+                func.expiration = datetime.now() + func.lifetime
+            else:
+                logger.info(f"Using camera status cache, will recheck at {func.expiration}")
+
+            return func(*args, **kwargs)
+
+        return wrapped_func
+
+    return wrapper_cache
 
 class Camera:
     def __init__(self, config, check_connection=False):
@@ -31,7 +53,8 @@ class Camera:
         self.cam_ip_list = [self.cam_ip, self.cam_wifi_ip] if self.cam_wifi_ip and isinstance(self.cam_wifi_ip, str) else [self.cam_ip]
         if check_connection:
             self.check_camera_connection()
-        
+            
+    @timed_lru_cache(30)
     def check_camera_connection(self, return_as_string=False):
         result = None
         
