@@ -3,7 +3,7 @@ FROM python:3.12
 SHELL ["/bin/bash", "-c"]
 
 # Install Nginx, create dashy dir, create dashy user with a home folder of /dashy and set the default shell to bash
-RUN apt update && apt install -y --no-install-recommends nginx python3-venv && \
+RUN apt update && apt install -y --no-install-recommends nginx python3-venv ffmpeg && \
     mkdir /dashy && useradd dashy -d /dashy -s /bin/bash
 
 WORKDIR /dashy
