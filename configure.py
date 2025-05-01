@@ -31,6 +31,11 @@ ssl_enabled = bool(os.environ.get('SSL_ENABLED', False))
 ssl_cert_path = os.environ.get('SSL_CERT_PATH')
 # SSL Key Path
 ssl_key_path = os.environ.get('SSL_KEY_PATH')
+# Scrape Interval
+scrape_interval = int(os.environ.get('SCRAPE_INTERVAL', 900))
+# Reconnect Interval
+reconnect_interval = int(os.environ.get('RECONNECT_INTERVAL', 300))
+
 if ssl_enabled:
     if not ssl_cert_path or not ssl_key_path:
         raise ValueError("SSL is enabled but SSL certificate or key path is missing.")
@@ -74,8 +79,13 @@ if __name__ == "__main__":
             "cam_proxy_port" : cam_proxy_port,
             "video_path": data_dir,
             "download_parking": download_parking,
-            "download_locked": download_locked
-        }, f, indent=4)
+            "download_locked": download_locked,
+            "reconnect_interval": reconnect_interval,
+            "scrape_interval": scrape_interval,
+            "ssl_enabled": ssl_enabled,
+            "thumbnails_dir": thumbnails_dir,
+            "locked_dir": locked_dir}, f, indent=4)
+        
     print("Configuration file generated successfully.")
     
     # Set owner recursivly as we are root\

@@ -91,11 +91,15 @@ if __name__ == "__main__":
               downloads.download_video(cam=cam)
               time.sleep(10)
               find_missing_thumbnails()
-              time.sleep(300)
+              scrape_interval = config_json.get('scrape_interval', 900)
+              print(f"Sleeping for {scrape_interval} minutes...")
+              time.sleep(scrape_interval)
             except Exception as e:
-              logger.error(f"Error downloading files: {str(e)}")
-              time.sleep(300)
+              scrape_interval = config_json.get('scrape_interval', 900)
+              logger.error(f"Error downloading files: {str(e)} Retrying in: {scrape_interval}")
+              time.sleep(scrape_interval)
         else:
-            logger.info("Camera not connected.")
-            # Wait for 2 minutes before checking again
-            time.sleep(60)
+            reconnect_interval = config_json.get('reconnect_interval', 300)
+            logger.info("Camera not connected, checking again in {} seconds...".format(reconnect_interval))
+            # Wait for N minutes before checking again
+            time.sleep(reconnect_interval)
