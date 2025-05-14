@@ -24,7 +24,31 @@ This is a work in progress, but I will be using it for my personal Dashcam, plea
 
 
 ## Install
+### Using Docker (Recommended for A229 Users, can be used by A129 users, but may require more setup)
+As of the latest updates to my code (and a pretty long testing period on my end), I am now using Docker/Kubernetes to run my Dashy application. This approach ensures that all dependencies are managed within a container, making it easier to deploy and maintain.
+#### Steps to Use Docker:
+1. **Install Docker**: If you haven't already, install Docker by following the official [Docker installation guide](https://docs.docker.com/engine/install/).
+2. **Pull the Docker Image**: Use the following command to pull the Dashy Docker image from GitLab's Docker Registry:
+   ```bash
+   docker pull registry.gitlab.com/muddy6910/dashy:main
+   ```
+3. **Run the image using docker run**: 
+   ```bash
+   docker run -d --name dashy -v $(pwd)/videos:/dashy/videos -e CAM_MODEL="A229-Plus" registry.gitlab.com/muddy6910/dashy:main
+   ```
+  **Environment Variables** 
+  
+  * CAM_MODEL - A129-Plus or A229-Plus (Default)
+  * CAM_IP - The IP of the camera (when connecting via Hotspot), 192.168.1.254 by default, do not change unless needed
+  * CAM_WIFI_IP - If using an A229-Plus, and connecting to your home network, set this to the IP of the camera on your WiFi Network (if you have to ask, this app is not for you ;). there are plenty of ways to get this info)
+  * DATA_DIR - Directory where Videos and Thumbnails are stored
+  * DOWNLOAD_LOCKED - Do you want to download driving mode locked files from the camera? (Default: True) 
+  * DOWNLOAD_PARKING - Do you want to download locked parking mode clips? (Default: True)
 
+  **These are the most common, Check configure.py for the rest**
+ 
+
+### Using a Raspberry Pi (Required by A129, will also work for A229)
 1. Install Debian packages
 ```bash
   $ sudo apt install python3 python3-pip nginx git -y 
