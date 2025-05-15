@@ -25,7 +25,7 @@ CAM_UPLOADER_PID=$!
 
 # Start webserver, capture PID for tracking 
 echo Starting Web Server
-su dashy -c "source .venv/bin/activate && python -m gunicorn -b $GUNICORN_BIND_ADDRESS $FLASK_APP" & 
+su dashy -c "source .venv/bin/activate && python -m gunicorn -b $GUNICORN_BIND_ADDRESS $FLASK_APP -w 2" & 
 WEB_SERVER_PID=$!
 
 # Print PIDs of running processes
