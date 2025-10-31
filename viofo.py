@@ -262,39 +262,41 @@ class Downloads:
                 
                 self.start_download_lock()
                 for file_url in file_urls:
-                    if cam and isinstance(cam, Camera):
-                        status = cam.check_camera_connection()
-                        if not status:
-                            raise Exception("Connection to camera has been lost")
+                    try:
+                        if cam and isinstance(cam, Camera):
+                            status = cam.check_camera_connection()
+                            if not status:
+                                raise Exception("Connection to camera has been lost")
+                            
+                        file_name = file_url.split('/')[-1]
+                        file_path = f'{self.download_path}/{file_name}'
                         
-                    file_name = file_url.split('/')[-1]
-                    file_path = f'{self.download_path}/{file_name}'
-                    
-                    with requests.get(self.base_url + file_url, stream=True, timeout=self.timeout) as response:
-                        if response.status_code == 200:
-                            with open(file_path, "wb+") as temp_file:
-                                logger.info(f"Downloading from URL: {self.base_url}{file_url} to {temp_file.name}")
-                                for chunk in response.iter_content(chunk_size=2048):
-                                    if chunk:
-                                        temp_file.write(chunk)
+                        with requests.get(self.base_url + file_url, stream=True, timeout=self.timeout) as response:
+                            if response.status_code == 200:
+                                with open(file_path, "wb+") as temp_file:
+                                    logger.info(f"Downloading from URL: {self.base_url}{file_url} to {temp_file.name}")
+                                    for chunk in response.iter_content(chunk_size=2048):
+                                        if chunk:
+                                            temp_file.write(chunk)
 
-                                logger.info(f"File successfully downloaded and moved to: {file_path}")
-                        else:
-                            logger.error("Failed to download file {} Status: {}".format(file_url, response.status_code))
-                            continue
-                
-                    # Append file to downloaded_files list, keep track of the downloads
-                    downloaded_files = self.db.load_downloaded_files()
-                    downloaded_files.append(file_url)
-                    self.db.save_downloaded_files(downloaded_files)
-                    downloaded_files = self.db.load_downloaded_files()
-                        
-                    # Remove from queue, save back to file
-                    file_urls = self.db.load_download_queue()
-                    file_urls.remove(file_url)
-                    self.db.save_download_queue(file_urls)
-                    file_urls = self.db.load_download_queue()
+                                    logger.info(f"File successfully downloaded and moved to: {file_path}")
+                            else:
+                                logger.error("Failed to download file {} Status: {}".format(file_url, response.status_code))
+                                continue
                     
+                        # Append file to downloaded_files list, keep track of the downloads
+                        downloaded_files = self.db.load_downloaded_files()
+                        downloaded_files.append(file_url)
+                        self.db.save_downloaded_files(downloaded_files)
+                        downloaded_files = self.db.load_downloaded_files()
+                            
+                        # Remove from queue, save back to file
+                        file_urls = self.db.load_download_queue()
+                        file_urls.remove(file_url)
+                        self.db.save_download_queue(file_urls)
+                        file_urls = self.db.load_download_queue()
+                    except Exception as e:
+                        logger.info(f"Exception: {e} Skipping file: {file_url}")
                 # Save the updated downloaded_files list to downloads.json
                 self.stop_download_lock()
                 logger.info("Downloads complete!")
