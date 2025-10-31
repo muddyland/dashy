@@ -62,7 +62,7 @@ class Camera:
             logger.info(f"Checking {self.cam_model} IP {ip}")
             # Check to see if port 80 is open on wifi IP first
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2)
+                s.settimeout(10)
                 result = s.connect_ex((ip, 80))
                 
         
