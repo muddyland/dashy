@@ -35,7 +35,8 @@ ssl_key_path = os.environ.get('SSL_KEY_PATH')
 scrape_interval = int(os.environ.get('SCRAPE_INTERVAL', 900))
 # Reconnect Interval
 reconnect_interval = int(os.environ.get('RECONNECT_INTERVAL', 300))
-
+# Download timeout
+request_timeout = int(os.environ.get('REQUEST_TIMEOUT', 900))
 if ssl_enabled:
     if not ssl_cert_path or not ssl_key_path:
         raise ValueError("SSL is enabled but SSL certificate or key path is missing.")
@@ -84,7 +85,9 @@ if __name__ == "__main__":
             "scrape_interval": scrape_interval,
             "ssl_enabled": ssl_enabled,
             "thumbnails_dir": thumbnails_dir,
-            "locked_dir": locked_dir}, f, indent=4)
+            "locked_dir": locked_dir,
+            "request_timeout" : request_timeout
+        }, f, indent=4)
         
     print("Configuration file generated successfully.")
     
