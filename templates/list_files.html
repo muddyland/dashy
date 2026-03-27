@@ -25,18 +25,10 @@
                 <div class="col-md-6">
                     <div class="card-body">
                         <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
+                        <p class="card-text small text-white-50 mb-3">{{ video_file.filename }}</p>
                         <p class="card-text">
-
-                            <table>
-                                <tr><th>{{ video_file.location }}</th></tr>
-                                <tr><th>{{ video_file.number }}</th></tr>
-                                <tr>
-                                    <th>
-                                        <button type="button" class="btn btn-success"><a href="/locked/{{ video_file.filename }}" style="color: white" download><i class="fas fa-save"></i>Download</a></button>
-                                        <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ video_file.number }}"><i class="fas fa-trash"></i> Delete</button>
-                                    </th>
-                                </tr>
-                            </table>
+                            <a href="/locked/{{ video_file.filename }}" class="btn btn-success btn-sm" download><i class="fas fa-save"></i> Download</a>
+                            <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ video_file.number }}"><i class="fas fa-trash"></i> Delete</button>
                             <!-- Delete Confirmation Modal -->
                             <div class="modal fade delete-modal" id="deleteModal-{{ video_file.number }}">
                                 <div class="modal-dialog modal-dialog-centered">
@@ -81,25 +73,19 @@
 </div>
 
 {% if total_items > per_page %}
-<nav aria-label="Page navigation" style="background-color: #333; color: #fff;">
-    <ul class="pagination justify-content-center">
-        {% if has_prev %}
-            <li class="page-item"><a class="page-link" style="color: #fff;" href="?page={{ page - 1 }}">Previous</a></li>
-        {% endif %}
-        {% for num in range(1, (total_items // per_page) + 2) %}
-            {% if num == page %}
-                <li class="page-item active" aria-current="page" style="background-color: #555;"><span class="page-link">{{ num }}</span></li>
-            {% else %}
-                <li class="page-item"><a class="page-link" style="color: #fff;" href="?page={{ num }}">{{ num }}</a></li>
-            {% endif %}
-        {% endfor %}
-        {% if has_next %}
-            <li class="page-item"><a class="page-link" style="color: #fff;" href="?page={{ page + 1 }}">Next</a></li>
-        {% endif %}
+<nav aria-label="Page navigation">
+    <ul class="pagination justify-content-center align-items-center">
+        <li class="page-item {% if not has_prev %}disabled{% endif %}">
+            <a class="page-link" style="color: #fff;" href="?page={{ page - 1 }}">&#8592; Prev</a>
+        </li>
+        <li class="page-item disabled">
+            <span class="page-link text-white-50">Page {{ page }} of {{ ((total_items - 1) // per_page) + 1 }}</span>
+        </li>
+        <li class="page-item {% if not has_next %}disabled{% endif %}">
+            <a class="page-link" style="color: #fff;" href="?page={{ page + 1 }}">Next &#8594;</a>
+        </li>
     </ul>
 </nav>
-{% else %}
-<b>There is only 1 page 😊</b>
 {% endif %}
 
 {% endblock %}

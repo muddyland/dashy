@@ -1,5 +1,10 @@
+# DEPRECATED: The downloader loop has been merged into dashy_web.py as a
+# background thread. This file is kept for reference only. Running it alongside
+# dashy_web.py will cause duplicate downloads.
+
 import os
 import time
+from datetime import datetime, timedelta
 from viofo import Camera, Downloads, DownloadsDB
 from dashy_config import Config
 import logging
@@ -40,6 +45,34 @@ def download_parking_files(cam):
         file_url = f"{file['dir']}/{file['filename']}"
         downloads.append_download_queue(file_url)
         
+def cleanup_old_files():
+    if not config_json.get('retention_enabled', True):
+        logger.info("Retention is disabled, skipping cleanup.")
+        return
+
+    retention_days = config_json.get('retention_days', 180)
+    cutoff = datetime.now() - timedelta(days=retention_days)
+    downloads = Downloads(config)
+
+    deleted = 0
+    for file_name in os.listdir(downloads.download_path):
+        if not file_name.endswith('.MP4'):
+            continue
+        file_path = os.path.join(downloads.download_path, file_name)
+        modified_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+        if modified_time < cutoff:
+            try:
+                os.remove(file_path)
+                thumbnail = os.path.join(downloads.thumbnail_path, file_name.replace('.MP4', '.jpg'))
+                if os.path.exists(thumbnail):
+                    os.remove(thumbnail)
+                logger.info(f"Deleted old clip: {file_name} (last modified {modified_time.strftime('%Y-%m-%d')})")
+                deleted += 1
+            except Exception as e:
+                logger.error(f"Failed to delete {file_name}: {e}")
+
+    logger.info(f"Cleanup complete. {deleted} clip(s) deleted older than {retention_days} days.")
+
 def find_missing_thumbnails():
     downloads = Downloads(config)
     local_files = os.listdir(downloads.download_path)
@@ -91,6 +124,7 @@ if __name__ == "__main__":
               downloads.download_video(cam=cam)
               time.sleep(10)
               find_missing_thumbnails()
+              cleanup_old_files()
               scrape_interval = config_json.get('scrape_interval', 900)
               print(f"Sleeping for {scrape_interval} minutes...")
               time.sleep(scrape_interval)

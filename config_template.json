@@ -4,5 +4,7 @@
     "cam_model" : "A229-Plus", // or A129-Plus, others may work, but the file names may not be the same
     "video_path" : "videos", // Path where to save videos/thumbnails
     "download_parking" : true, // Download Parking Mode clips
-    "download_locked" : true // Download Driving Mode clips
+    "download_locked" : true, // Download Driving Mode clips
+    "retention_enabled" : true, // Set to false to disable auto-deletion and keep all clips forever
+    "retention_days" : 180 // Delete clips older than this many days (default: 180 = 6 months)
 }
