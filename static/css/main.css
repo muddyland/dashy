@@ -14,13 +14,19 @@ body {
     outline-width: 5px;
 }
 .navbar {
-    background-color: #343a40;
+    background-color: #1a1d20;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    border-bottom: 2px solid #e63946;
 }
 .navbar .btn {
     margin-right: 10px;
 }
 .navbar-brand {
-    color: #fff;
+    color: #e63946;
+    font-weight: 700;
+}
+.navbar-brand:hover {
+    color: #ff6b7a;
 }
 .navbar-nav {
     color: #fff;

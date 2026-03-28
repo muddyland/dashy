@@ -60,48 +60,34 @@
             </div>
             {% endif %}
             <div class="row g-0">
-                <div class="col-md-6">
-                    <script>
-                        // Get the video element
-                        const video = document.getElementById('{{ video_file.filename }}_vid');
-                        
-                        // Pause the video immediately when loaded
-                        video.addEventListener('loadedmetadata', function() {
-                            video.pause();
-                        });
-                        
-                        // Listen for the first frame loaded event and pause the video
-                        video.addEventListener('loadeddata', function() {
-                            video.pause();
-                        });
-                    </script>
-                    <video id="{{ video_file.filename }}_vid" width="100%" controls="false" preload="metadata">
+                <div class="col-md-6 order-md-1 order-2">
+                    <video id="{{ video_file.filename }}_vid" width="100%" controls preload="metadata" playsinline>
                         <source src="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
                 </div>
-                <div class="col-md-6">
+                <div class="col-md-6 order-md-2 order-1">
                     <div class="card-body">
                         <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
-                        <p class="card-text small text-white-50 mb-3">{{ video_file.filename }}</p>
-                        <p class="card-text">
+                        <p class="card-text small text-white-50 mb-3 text-truncate">{{ video_file.filename }}</p>
+                        <div class="d-grid d-md-flex gap-2">
                             {% if not video_file.downloaded and not video_file.in_queue %}
-                            <button type="button" id="'grab-local-{{ video_file.number }}" class="btn btn-primary btn-sm" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
+                            <button type="button" id="grab-local-{{ video_file.number }}" class="btn btn-primary" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
                                 <i class="fas fa-cloud-download-alt"></i> Save Local
                             </button>
-                            <a class="btn btn-success btn-sm" href="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" download>
+                            <a class="btn btn-success" href="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" download>
                                 <i class="fa fa-save"></i> Download
                             </a>
                             {% elif video_file.in_queue %}
-                            <button type="button" class="btn btn-info btn-sm" disabled>
+                            <button type="button" class="btn btn-info" disabled>
                                 <i class="fa fa-save"></i> In Queue
                             </button>
                             {% else %}
-                            <button type="button" class="btn btn-success btn-sm" disabled>
+                            <button type="button" class="btn btn-success" disabled>
                                 <i class="fa fa-save"></i> Downloaded
                             </button>
                             {% endif %}
-                        </p>
+                        </div>
                     </div>
                 </div>
             </div>

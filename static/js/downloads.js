@@ -34,9 +34,9 @@ $(document).ready(function() {
 
                 $('#queue-dropdown').append(
                     '<li>' +
-                    '<div class="px-3 py-2">' +
+                    '<div class="px-3 py-2" style="max-width:280px;">' +
                     '<small class="text-white-50">Downloading:</small><br>' +
-                    '<small>' + progress.filename + '</small>' +
+                    '<small class="d-block text-truncate">' + progress.filename + '</small>' +
                     '<div class="progress mt-1" style="height: 6px;">' +
                     '<div class="' + barClass + '" role="progressbar" style="width:' + barWidth + '"></div>' +
                     '</div>' +
@@ -53,7 +53,7 @@ $(document).ready(function() {
             if (pendingQueue.length > 0) {
                 pendingQueue.forEach(function(item) {
                     var fname = item.split('/').pop();
-                    $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">' + fname + '</a></li>');
+                    $('#queue-dropdown').append('<li><a class="dropdown-item text-truncate d-block" style="max-width:280px;" href="#">' + fname + '</a></li>');
                 });
             } else if (!progress.active) {
                 $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">Nothing in the queue!</a></li>');
