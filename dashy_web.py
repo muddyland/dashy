@@ -345,6 +345,64 @@ def list_all_cam_files():
     except Exception as e:
         return render_template('list_cam_files.html', video_files=[], error=f"Exception: {e}")
 
+@app.route('/cam/live')
+def cam_live():
+    return render_template('live.html',
+                           cam_status=cam_status.connected_string,
+                           cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}")
+
+
+@app.route('/cam/mjpeg_stream')
+def mjpeg_stream():
+    if not cam_status.connected:
+        return "Camera not connected", 503
+    try:
+        r = http_requests.get(cam.mjpeg_url, stream=True, timeout=30)
+        content_type = r.headers.get('Content-Type', 'multipart/x-mixed-replace; boundary=myboundary')
+        def generate():
+            try:
+                for chunk in r.iter_content(chunk_size=4096):
+                    if chunk:
+                        yield chunk
+            finally:
+                r.close()
+        return Response(generate(), content_type=content_type)
+    except Exception as e:
+        return str(e), 502
+
+
+@app.route('/api/cam/info')
+def api_cam_info():
+    if not cam_status.connected:
+        return jsonify({"error": "Camera not connected"}), 503
+    try:
+        return jsonify(cam.get_camera_info())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/cam/control', methods=['POST'])
+def api_cam_control():
+    if not cam_status.connected:
+        return jsonify({"error": "Camera not connected"}), 503
+    data = request.get_json()
+    action = data.get('action') if data else None
+    try:
+        if action == 'start_recording':
+            result = cam.start_recording()
+        elif action == 'stop_recording':
+            result = cam.stop_recording()
+        elif action == 'take_photo':
+            result = cam.take_photo()
+        else:
+            return jsonify({"error": f"Unknown action: {action}"}), 400
+        if result.get('rval', -1) != 0:
+            return jsonify({"error": f"Camera returned rval={result.get('rval')}"}), 500
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/cam/settings')
 def cam_settings():
     return render_template('settings.html',

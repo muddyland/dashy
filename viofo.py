@@ -170,6 +170,19 @@ CAMERA_SETTINGS = {
 }
 
 
+# Control and status command IDs (not settings; used for direct actions and queries).
+# Source: Command class in Viofo APK camkit library.
+_CMD_CONTROL = {
+    "MOVIE_RECORD":      2001,  # GET → current state; param_0=1 → start, param_0=0 → stop
+    "PHOTO_CAPTURE":     1001,  # GET → trigger photo
+    "CARD_FREE_SPACE":   3017,  # GET → {param: free_mb}
+    "FIRMWARE_VERSION":  3012,  # GET → {cur_value: "SA_A229_V2.1_..."}
+    "GET_CURRENT_STATE": 3014,  # GET → {msg: "record"|"idle"|...}
+    "GET_BATTERY_LEVEL": 3019,  # GET → {param: percent_0_to_100}
+    "GET_CARD_STATUS":   3024,  # GET → {param: 1=ok, 0=missing/error}
+}
+
+
 class CameraStatus:
     """Thread-safe shared camera state. Updated by a background thread;
     read by web routes and the downloader without ever blocking on a socket."""
@@ -356,6 +369,39 @@ class Camera:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         return response.json()
+
+    @property
+    def mjpeg_url(self):
+        """MJPEG stream URL served by the camera on port 8192."""
+        return f"http://{self.connected_ip}:8192" if self.connected_ip else None
+
+    def get_camera_info(self):
+        """
+        Fetch camera status in one call: state, free space, battery, card health, firmware.
+        Each key contains the raw camera JSON response, or {"rval":-1, "error": str} on failure.
+        """
+        result = {}
+        for key, cmd in [
+            ("state",       _CMD_CONTROL["GET_CURRENT_STATE"]),
+            ("free_space",  _CMD_CONTROL["CARD_FREE_SPACE"]),
+            ("battery",     _CMD_CONTROL["GET_BATTERY_LEVEL"]),
+            ("card_status", _CMD_CONTROL["GET_CARD_STATUS"]),
+            ("firmware",    _CMD_CONTROL["FIRMWARE_VERSION"]),
+        ]:
+            try:
+                result[key] = self.get_setting(cmd)
+            except Exception as e:
+                result[key] = {"rval": -1, "error": str(e)}
+        return result
+
+    def start_recording(self):
+        return self.set_setting(_CMD_CONTROL["MOVIE_RECORD"], 1)
+
+    def stop_recording(self):
+        return self.set_setting(_CMD_CONTROL["MOVIE_RECORD"], 0)
+
+    def take_photo(self):
+        return self.get_setting(_CMD_CONTROL["PHOTO_CAPTURE"])
 
     def generate_video_frames(self):
         if not self.connected or not self.connected_ip:

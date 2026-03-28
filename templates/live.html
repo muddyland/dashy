@@ -1,0 +1,172 @@
+{% extends 'main.html' %}
+
+{% block title %}Live View{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mt-4 mb-3">
+    <h4 class="mb-0"><i class="fas fa-video"></i> Live View</h4>
+    <span id="state-badge" class="badge" style="background:#21262d; color:#484f58; font-size:0.85rem;">
+        {% if cam_status == 'connected' %}<i class="fas fa-spinner fa-spin"></i> Loading…{% else %}—{% endif %}
+    </span>
+</div>
+
+{% if cam_status != 'connected' %}
+<div class="alert mb-4" style="background:#21262d; border:1px solid #e57373; color:#e57373;">
+    <i class="fas fa-exclamation-triangle"></i> Camera is not connected.
+</div>
+{% endif %}
+
+<!-- Stream -->
+<div class="card mb-4" style="background:#000; overflow:hidden;">
+    <div style="min-height:240px; display:flex; align-items:center; justify-content:center; position:relative;">
+        {% if cam_status == 'connected' %}
+        <img id="mjpeg-stream"
+             src="/cam/mjpeg_stream"
+             style="max-width:100%; width:100%; display:block;"
+             onerror="this.style.display='none'; document.getElementById('stream-error').style.display='flex';">
+        {% endif %}
+        <div id="stream-error"
+             style="display:{% if cam_status != 'connected' %}flex{% else %}none{% endif %};
+                    flex-direction:column; align-items:center; padding:3rem; color:#484f58;">
+            <i class="fas fa-video-slash" style="font-size:3rem; margin-bottom:1rem;"></i>
+            <span>Stream unavailable</span>
+            <small class="mt-1">MJPEG not available — try the RTSP proxy via the camera link above</small>
+        </div>
+    </div>
+</div>
+
+<!-- Controls -->
+{% if cam_status == 'connected' %}
+<div class="d-flex gap-2 mb-4 flex-wrap">
+    <button id="btn-start" class="btn btn-success" onclick="camControl('start_recording')">
+        <i class="fas fa-circle"></i> Start Recording
+    </button>
+    <button id="btn-stop" class="btn btn-danger" onclick="camControl('stop_recording')" style="display:none;">
+        <i class="fas fa-stop"></i> Stop Recording
+    </button>
+    <button id="btn-photo" class="btn btn-primary" onclick="camControl('take_photo')">
+        <i class="fas fa-camera"></i> Take Photo
+    </button>
+</div>
+{% endif %}
+
+<!-- Info Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-3">
+            <div id="info-state" style="color:#484f58; font-size:1.2rem; font-weight:700;">—</div>
+            <div class="small" style="color:#484f58;"><i class="fas fa-circle"></i> State</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-3">
+            <div id="info-space" style="color:#00b4d8; font-size:1.2rem; font-weight:700;">—</div>
+            <div class="small" style="color:#484f58;"><i class="fas fa-sd-card"></i> Free Space</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-3">
+            <div id="info-battery" style="color:#00b4d8; font-size:1.2rem; font-weight:700;">—</div>
+            <div class="small" style="color:#484f58;"><i class="fas fa-battery-half"></i> Battery</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center py-3">
+            <div id="info-firmware" style="color:#00b4d8; font-size:0.85rem; font-weight:700; word-break:break-all;">—</div>
+            <div class="small" style="color:#484f58;"><i class="fas fa-microchip"></i> Firmware</div>
+        </div>
+    </div>
+</div>
+
+{% if cam_status == 'connected' %}
+<script>
+function camControl(action) {
+    var btns = ['btn-start', 'btn-stop', 'btn-photo'].map(function(id) {
+        return document.getElementById(id);
+    }).filter(Boolean);
+    btns.forEach(function(b) { b.disabled = true; });
+
+    fetch('/api/cam/control', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: action})
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+        if (!res.ok) alert('Error: ' + (res.data.error || 'Unknown'));
+        refreshInfo();
+    })
+    .catch(function() { alert('Request failed'); })
+    .finally(function() { btns.forEach(function(b) { b.disabled = false; }); });
+}
+
+function parseState(stateObj) {
+    if (!stateObj || stateObj.rval !== 0) return null;
+    var raw = (stateObj.msg || stateObj.cur_value || '').toLowerCase();
+    if (raw.includes('record')) return 'recording';
+    if (typeof stateObj.param === 'number' && stateObj.param === 1) return 'recording';
+    return 'idle';
+}
+
+function formatSpace(obj) {
+    if (!obj || obj.rval !== 0) return '—';
+    var mb = obj.param;
+    if (mb === undefined || mb === null) return '—';
+    return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb + ' MB';
+}
+
+function refreshInfo() {
+    fetch('/api/cam/info')
+    .then(function(r) { return r.json(); })
+    .then(function(info) {
+        if (info.error) return;
+
+        var state = parseState(info.state);
+        var badge = document.getElementById('state-badge');
+        var stateEl = document.getElementById('info-state');
+        var btnStart = document.getElementById('btn-start');
+        var btnStop = document.getElementById('btn-stop');
+
+        if (state === 'recording') {
+            badge.innerHTML = '<i class="fas fa-circle queue-pulse" style="color:#e57373;"></i> Recording';
+            badge.style.color = '#e57373';
+            stateEl.innerHTML = '<i class="fas fa-circle queue-pulse"></i> Recording';
+            stateEl.style.color = '#e57373';
+            if (btnStart) btnStart.style.display = 'none';
+            if (btnStop)  btnStop.style.display  = '';
+        } else if (state === 'idle') {
+            badge.innerHTML = '<i class="fas fa-circle" style="color:#3fb950;"></i> Idle';
+            badge.style.color = '#3fb950';
+            stateEl.textContent = 'Idle';
+            stateEl.style.color = '#3fb950';
+            if (btnStart) btnStart.style.display = '';
+            if (btnStop)  btnStop.style.display  = 'none';
+        } else {
+            badge.innerHTML = '<i class="fas fa-circle" style="color:#484f58;"></i> Unknown';
+            badge.style.color = '#484f58';
+            stateEl.textContent = '—';
+            stateEl.style.color = '#484f58';
+        }
+
+        document.getElementById('info-space').textContent = formatSpace(info.free_space);
+
+        var bat = info.battery || {};
+        document.getElementById('info-battery').textContent =
+            (bat.rval === 0 && bat.param !== undefined) ? bat.param + '%' : '—';
+
+        var fw = info.firmware || {};
+        document.getElementById('info-firmware').textContent =
+            (fw.rval === 0) ? (fw.cur_value || String(fw.param || '—')) : '—';
+    })
+    .catch(function() {
+        document.getElementById('state-badge').innerHTML =
+            '<i class="fas fa-exclamation-circle" style="color:#e57373;"></i> Error';
+    });
+}
+
+refreshInfo();
+setInterval(refreshInfo, 5000);
+</script>
+{% endif %}
+
+{% endblock %}

@@ -125,6 +125,19 @@ def serve_file(filename):
 # Mock camera settings API  (?custom=1&cmd=N and ?custom=1&cmd=N&param_0=V)
 # ---------------------------------------------------------------------------
 
+# Control/status responses (state is mutable so start/stop recording works in the mock)
+_mock_recording = False
+
+MOCK_STATUS = {
+    1001: lambda: {"rval": 0, "type": 1001, "msg": "photo_capture"},
+    3012: lambda: {"rval": 0, "type": 3012, "cur_value": "VIOFO_A229_V2.1_20240115"},
+    3017: lambda: {"rval": 0, "type": 3017, "param": 28672},
+    3019: lambda: {"rval": 0, "type": 3019, "param": 85},
+    3024: lambda: {"rval": 0, "type": 3024, "param": 1},
+    3014: lambda: {"rval": 0, "type": 3014, "msg": "record" if _mock_recording else "idle",
+                   "param": 1 if _mock_recording else 0},
+}
+
 MOCK_SETTINGS = {
     2002: {"cur_value": "2160P 30fps", "options": ["2160P 30fps", "1440P 60fps", "1080P 120fps", "1080P 60fps", "720P 240fps"]},
     2003: {"cur_value": "3 Min", "options": ["1 Min", "2 Min", "3 Min", "5 Min", "10 Min"]},
@@ -162,18 +175,24 @@ MOCK_SETTINGS = {
 
 @app.route('/')
 def index_or_api():
+    global _mock_recording
     if request.args.get('custom') == '1':
         cmd = request.args.get('cmd', type=int)
         param_0 = request.args.get('param_0')
         if cmd is None:
             return jsonify({"rval": -1}), 400
+
         if param_0 is not None:
-            # SET
-            if cmd in MOCK_SETTINGS:
+            # SET / ACTION
+            if cmd == 2001:  # MOVIE_RECORD: param_0=1 start, param_0=0 stop
+                _mock_recording = (param_0 == '1')
+            elif cmd in MOCK_SETTINGS:
                 MOCK_SETTINGS[cmd]['cur_value'] = param_0.replace('+', ' ')
             return jsonify({"rval": 0, "type": cmd})
         else:
-            # GET
+            # GET — check status commands first, then settings
+            if cmd in MOCK_STATUS:
+                return jsonify(MOCK_STATUS[cmd]())
             setting = MOCK_SETTINGS.get(cmd)
             if setting:
                 return jsonify({"rval": 0, "type": cmd, "param": 0,

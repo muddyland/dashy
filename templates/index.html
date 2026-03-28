@@ -12,14 +12,17 @@
         </div>
     </div>
     <div class="col-6 col-md-4">
+        <a href="/cam/live" style="text-decoration:none;">
         <div class="card text-center py-3">
             {% if cam_status == 'connected' %}
             <div style="color:#00b4d8; font-size:1.6rem; font-weight:700;"><i class="fas fa-circle" style="font-size:1rem;"></i> Online</div>
+            <div id="cam-state-label" class="small mt-1" style="color:#484f58;">—</div>
             {% else %}
             <div style="color:#e57373; font-size:1.6rem; font-weight:700;"><i class="fas fa-circle" style="font-size:1rem;"></i> Offline</div>
             {% endif %}
             <div class="small" style="color:#484f58;"><i class="fas fa-camera"></i> Camera</div>
         </div>
+        </a>
     </div>
     <div class="col-12 col-md-4">
         <div class="card text-center py-3">
@@ -96,6 +99,23 @@
 <div class="text-center mt-2 mb-4">
     <a href="/storage/locked" class="btn btn-secondary"><i class="fas fa-th"></i> View All {{ total_clips }} Clips</a>
 </div>
+{% endif %}
+
+{% if cam_status == 'connected' %}
+<script>
+fetch('/api/cam/info')
+.then(function(r) { return r.json(); })
+.then(function(info) {
+    var el = document.getElementById('cam-state-label');
+    if (!el || info.error) return;
+    var s = info.state || {};
+    var raw = (s.msg || s.cur_value || '').toLowerCase();
+    var recording = raw.includes('record') || (typeof s.param === 'number' && s.param === 1);
+    el.innerHTML = recording
+        ? '<i class="fas fa-circle queue-pulse" style="color:#e57373;"></i> Recording'
+        : '<i class="fas fa-circle" style="color:#3fb950;"></i> Idle';
+});
+</script>
 {% endif %}
 
 {% endblock %}
