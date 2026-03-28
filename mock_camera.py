@@ -12,7 +12,7 @@ Usage:
 
 import argparse
 from datetime import datetime, timedelta
-from flask import Flask, Response
+from flask import Flask, Response, request, jsonify
 import random
 
 app = Flask(__name__)
@@ -121,8 +121,69 @@ def serve_file(filename):
     )
 
 
+# ---------------------------------------------------------------------------
+# Mock camera settings API  (?custom=1&cmd=N and ?custom=1&cmd=N&param_0=V)
+# ---------------------------------------------------------------------------
+
+MOCK_SETTINGS = {
+    2002: {"cur_value": "2160P 30fps", "options": ["2160P 30fps", "1440P 60fps", "1080P 120fps", "1080P 60fps", "720P 240fps"]},
+    2003: {"cur_value": "3 Min", "options": ["1 Min", "2 Min", "3 Min", "5 Min", "10 Min"]},
+    2004: {"cur_value": "On", "options": ["On", "Off"]},
+    2005: {"cur_value": "0", "options": ["-2.0", "-1.5", "-1.0", "-0.5", "0", "+0.5", "+1.0", "+1.5", "+2.0"]},
+    2006: {"cur_value": "Off", "options": ["Off", "Low", "Medium", "High"]},
+    2007: {"cur_value": "On", "options": ["On", "Off"]},
+    2008: {"cur_value": "On", "options": ["On", "Off"]},
+    2011: {"cur_value": "Medium", "options": ["Off", "Low", "Medium", "High"]},
+    9212: {"cur_value": "High", "options": ["High", "Low"]},
+    9214: {"cur_value": "On", "options": ["On", "Off"]},
+    9218: {"cur_value": "Color", "options": ["Color", "B&W", "Auto"]},
+    9219: {"cur_value": "Off", "options": ["On", "Off"]},
+    9220: {"cur_value": "Off", "options": ["On", "Off"]},
+    9221: {"cur_value": "Medium", "options": ["Off", "Low", "Medium", "High"]},
+    9225: {"cur_value": "On", "options": ["On", "Off"]},
+    9318: {"cur_value": "On", "options": ["On", "Off"]},
+    9319: {"cur_value": "On", "options": ["On", "Off"]},
+    9333: {"cur_value": "On", "options": ["On", "Off"]},
+    9405: {"cur_value": "3 Min", "options": ["Off", "1 Min", "2 Min", "3 Min", "5 Min"]},
+    9406: {"cur_value": "60Hz", "options": ["50Hz", "60Hz"]},
+    9410: {"cur_value": "On", "options": ["On", "Off"]},
+    9411: {"cur_value": "UTC-5", "options": ["UTC-12", "UTC-11", "UTC-10", "UTC-9", "UTC-8", "UTC-7", "UTC-6", "UTC-5", "UTC-4", "UTC-3", "UTC-2", "UTC-1", "UTC+0", "UTC+1", "UTC+2", "UTC+3", "UTC+4", "UTC+5", "UTC+6", "UTC+7", "UTC+8", "UTC+9", "UTC+10", "UTC+11", "UTC+12"]},
+    9412: {"cur_value": "mph", "options": ["km/h", "mph"]},
+    9421: {"cur_value": "Normal", "options": ["Normal", "Low Bitrate", "Super Night Vision", "Off"]},
+    9428: {"cur_value": "5 Min", "options": ["1 Min", "3 Min", "5 Min", "10 Min"]},
+    9094: {"cur_value": "On", "options": ["On", "Off"]},
+    3003: {"cur_value": "VIOFO_A229", "options": []},
+    3004: {"cur_value": "12345678", "options": []},
+    3007: {"cur_value": "Off", "options": ["Off", "1 Min", "3 Min", "5 Min", "10 Min"]},
+    8225: {"cur_value": "Off", "options": ["Off", "Flip Horizontal", "Flip Vertical", "180°"]},
+    8226: {"cur_value": "Off", "options": ["Off", "Flip Horizontal", "Flip Vertical", "180°"]},
+}
+
+
 @app.route('/')
-def index():
+def index_or_api():
+    if request.args.get('custom') == '1':
+        cmd = request.args.get('cmd', type=int)
+        param_0 = request.args.get('param_0')
+        if cmd is None:
+            return jsonify({"rval": -1}), 400
+        if param_0 is not None:
+            # SET
+            if cmd in MOCK_SETTINGS:
+                MOCK_SETTINGS[cmd]['cur_value'] = param_0.replace('+', ' ')
+            return jsonify({"rval": 0, "type": cmd})
+        else:
+            # GET
+            setting = MOCK_SETTINGS.get(cmd)
+            if setting:
+                return jsonify({"rval": 0, "type": cmd, "param": 0,
+                                "cur_value": setting['cur_value'],
+                                "options": setting['options']})
+            return jsonify({"rval": -13, "type": cmd})
+    return _index()
+
+
+def _index():
     """Simple status page so you can verify the mock is running."""
     total = sum(len(v) for v in CLIPS.values())
     rows = "".join(

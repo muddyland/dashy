@@ -17,6 +17,159 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 
+# ---------------------------------------------------------------------------
+# Camera settings definitions
+#
+# cmd IDs extracted from the official Viofo APK (camkit library).
+# Source classes: Command (base), Command_A129, Command_A229.
+#
+# HTTP API:
+#   Get:  GET http://IP/?custom=1&cmd=<N>
+#         → {"rval":0,"type":N,"cur_value":"...","options":[...]}
+#   Set:  GET http://IP/?custom=1&cmd=<N>&param_0=<value>
+#         → {"rval":0,"type":N}
+# ---------------------------------------------------------------------------
+
+# Base command IDs shared by all supported models (from Command class in camkit).
+_CMD_BASE = {
+    # Video
+    "MOVIE_RESOLUTION":       2002,
+    "MOVIE_CYCLIC_REC":       2003,
+    "MOVIE_WDR":              2004,
+    "MOVIE_EXPOSURE":         2005,
+    "MOTION_DET":             2006,
+    "MOVIE_AUDIO":            2007,
+    "MOVIE_DATE_PRINT":       2008,
+    "MOVIE_GSENSOR_SENS":     2011,
+    "MOVIE_BITRATE":          9212,
+    "GPS_INFO_STAMP":         9214,
+    "GPS":                    9410,
+    "SPEED_UNIT":             9412,
+    # Camera
+    "REAR_CAMERA_MIRROR":     9219,
+    "PARKING_G_SENSOR":       9220,  # A229 repurposes this slot for interior mirror
+    "IMAGE_ROTATE":           9093,
+    "IR_CAMERA_COLOR":        9218,
+    # Parking
+    "PARKING_MODE":           9421,
+    "PARKING_MOTION_DETECT":  9221,
+    "PARKING_RECORDING_TIMER": 9428,
+    # System
+    "BEEP_SOUND":             9094,
+    "SCREEN_SAVER":           9405,
+    "FREQUENCY":              9406,
+    "AUTO_POWER_OFF":         3007,
+    "TIME_ZONE":              9411,
+    "WIFI_NAME":              3003,
+    "WIFI_PWD":               3004,
+}
+
+# A129-Plus overrides (Command_A129 in camkit).
+_CMD_A129 = {
+    **_CMD_BASE,
+    "BEEP_SOUND":                9403,
+    "IMAGE_ROTATE":              9413,
+    "ENTER_PARKING_MODE_TIMER":  9435,
+}
+
+# A229-Plus overrides (Command_A229 in camkit).
+# Note: cmd 9220 is INTERIOR_CAMERA_MIRROR on A229, not PARKING_G_SENSOR.
+_CMD_A229 = {
+    **_CMD_BASE,
+    "INTERIOR_CAMERA_MIRROR":    9220,   # reuses 9220; no separate parking G-sensor on A229
+    "REAR_IMAGE_ROTATE":         8225,
+    "INTERIOR_IMAGE_ROTATE":     8226,
+    "FRONT_CAMERA_HDR":          9318,
+    "REAR_CAMERA_HDR":           9319,
+    "INTERIOR_CAMERA_HDR":       9333,
+    "HDR_STAMP":                 9311,
+    "PARKING_GPS":               9225,
+    "PARKING_HDR":               9320,
+    "DAYLIGHT_SAVING":           9323,
+    "TIME_FORMAT":               9321,
+    "FORMAT_REMINDER":           9312,
+}
+# A229 has no separate parking G-sensor (slot is taken by interior mirror).
+del _CMD_A229["PARKING_G_SENSOR"]
+
+
+def _s(cmd_map, key, label):
+    """Return a setting dict only if the cmd is defined (non-zero) for this model."""
+    cmd = cmd_map.get(key, 0)
+    if cmd:
+        return {"cmd": cmd, "label": label}
+    return None
+
+
+def _build_settings(cmd_map, model):
+    """Assemble settings groups for one camera model, omitting unsupported entries."""
+    def group(items):
+        return [i for i in items if i is not None]
+
+    video = group([
+        _s(cmd_map, "MOVIE_RESOLUTION",   "Video Resolution"),
+        _s(cmd_map, "MOVIE_CYCLIC_REC",   "Loop Recording"),
+        _s(cmd_map, "MOVIE_WDR",          "WDR"),
+        _s(cmd_map, "MOVIE_EXPOSURE",     "Exposure Value"),
+        _s(cmd_map, "MOTION_DET",         "Motion Detection"),
+        _s(cmd_map, "MOVIE_AUDIO",        "Audio Recording"),
+        _s(cmd_map, "MOVIE_DATE_PRINT",   "Date Stamp"),
+        _s(cmd_map, "MOVIE_GSENSOR_SENS", "G-Sensor Sensitivity"),
+        _s(cmd_map, "MOVIE_BITRATE",      "Video Bitrate"),
+        _s(cmd_map, "GPS_INFO_STAMP",     "GPS Info Stamp"),
+        _s(cmd_map, "GPS",                "GPS"),
+        _s(cmd_map, "SPEED_UNIT",         "Speed Unit"),
+    ])
+
+    camera = group([
+        _s(cmd_map, "REAR_CAMERA_MIRROR",      "Rear Camera Mirror"),
+        _s(cmd_map, "IMAGE_ROTATE",            "Image Rotate"),
+        _s(cmd_map, "IR_CAMERA_COLOR",         "Interior Camera Color"),
+        # A229-Plus only
+        _s(cmd_map, "INTERIOR_CAMERA_MIRROR",  "Interior Camera Mirror"),
+        _s(cmd_map, "REAR_IMAGE_ROTATE",       "Rear Image Rotate"),
+        _s(cmd_map, "INTERIOR_IMAGE_ROTATE",   "Interior Image Rotate"),
+        _s(cmd_map, "FRONT_CAMERA_HDR",        "Front Camera HDR"),
+        _s(cmd_map, "REAR_CAMERA_HDR",         "Rear Camera HDR"),
+        _s(cmd_map, "INTERIOR_CAMERA_HDR",     "Interior Camera HDR"),
+        _s(cmd_map, "HDR_STAMP",               "HDR Stamp"),
+    ])
+
+    parking = group([
+        _s(cmd_map, "PARKING_MODE",            "Parking Mode"),
+        _s(cmd_map, "PARKING_MOTION_DETECT",   "Parking Motion Detection"),
+        _s(cmd_map, "PARKING_G_SENSOR",        "Parking G-Sensor"),
+        _s(cmd_map, "PARKING_RECORDING_TIMER", "Parking Recording Timer"),
+        _s(cmd_map, "ENTER_PARKING_MODE_TIMER","Enter Parking Mode Timer"),
+        # A229-Plus only
+        _s(cmd_map, "PARKING_GPS",             "Parking GPS"),
+        _s(cmd_map, "PARKING_HDR",             "Parking HDR"),
+    ])
+
+    system = group([
+        _s(cmd_map, "BEEP_SOUND",    "Beep Sound"),
+        _s(cmd_map, "SCREEN_SAVER",  "Screen Saver"),
+        _s(cmd_map, "FREQUENCY",     "Power Frequency"),
+        _s(cmd_map, "AUTO_POWER_OFF","Auto Power Off"),
+        _s(cmd_map, "TIME_ZONE",     "Time Zone"),
+        # A229-Plus only
+        _s(cmd_map, "TIME_FORMAT",   "Time Format"),
+        _s(cmd_map, "DAYLIGHT_SAVING","Daylight Saving"),
+        _s(cmd_map, "FORMAT_REMINDER","Format Reminder"),
+        _s(cmd_map, "WIFI_NAME",     "WiFi Name"),
+        _s(cmd_map, "WIFI_PWD",      "WiFi Password"),
+    ])
+
+    return {"Video": video, "Camera": camera, "Parking": parking, "System": system}
+
+
+# Pre-built per-model settings, keyed by cam_model string from config.
+CAMERA_SETTINGS = {
+    "A129-Plus": _build_settings(_CMD_A129, "A129-Plus"),
+    "A229-Plus": _build_settings(_CMD_A229, "A229-Plus"),
+}
+
+
 class CameraStatus:
     """Thread-safe shared camera state. Updated by a background thread;
     read by web routes and the downloader without ever blocking on a socket."""
@@ -83,6 +236,11 @@ class Camera:
         else:
             return self.connected
         
+    @property
+    def settings(self):
+        """Return the settings definition for the configured camera model."""
+        return CAMERA_SETTINGS.get(self.cam_model, {})
+
     def scrape_webserver(self, mode="driving", locked=True):
         if not self.connected or not self.base_url:
             raise Exception("Camera is not connected, impossible to scrape")
@@ -180,6 +338,25 @@ class Camera:
                 "mode" : mode, 
                 'thumbnail' : thumbnail_name
             }
+    def get_setting(self, cmd):
+        """GET /?custom=1&cmd=N - returns parsed JSON from camera."""
+        if not self.connected or not self.base_url:
+            raise Exception("Camera is not connected")
+        url = f"{self.base_url}/?custom=1&cmd={cmd}"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def set_setting(self, cmd, value):
+        """GET /?custom=1&cmd=N&param_0=VALUE - sets a camera setting."""
+        if not self.connected or not self.base_url:
+            raise Exception("Camera is not connected")
+        encoded = str(value).replace(' ', '+')
+        url = f"{self.base_url}/?custom=1&cmd={cmd}&param_0={encoded}"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
     def generate_video_frames(self):
         if not self.connected or not self.connected_ip:
             raise Exception("Camera is not connected")

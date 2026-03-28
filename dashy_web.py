@@ -345,6 +345,33 @@ def list_all_cam_files():
     except Exception as e:
         return render_template('list_cam_files.html', video_files=[], error=f"Exception: {e}")
 
+@app.route('/cam/settings')
+def cam_settings():
+    return render_template('settings.html',
+                           cam_status=cam_status.connected_string,
+                           cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}",
+                           settings=cam.settings)
+
+
+@app.route('/api/cam/setting/<int:cmd>', methods=['GET', 'POST'])
+def api_cam_setting(cmd):
+    if not cam_status.connected:
+        return jsonify({"error": "Camera not connected"}), 503
+    try:
+        if request.method == 'POST':
+            data = request.get_json()
+            if not data or 'value' not in data:
+                return jsonify({"error": "Missing 'value' in request body"}), 400
+            result = cam.set_setting(cmd, data['value'])
+            if result.get('rval', -1) != 0:
+                return jsonify({"error": f"Camera returned rval={result.get('rval')}"}), 500
+            return jsonify(result)
+        result = cam.get_setting(cmd)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/cam/locked')
 def list_cam_files():
     try:

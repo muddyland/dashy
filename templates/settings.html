@@ -1,0 +1,152 @@
+{% extends 'main.html' %}
+
+{% block title %}Camera Settings{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mt-4 mb-4">
+    <h4 class="mb-0"><i class="fas fa-sliders-h"></i> Camera Settings</h4>
+    {% if cam_status == 'connected' %}
+    <span class="badge" style="background:#21262d; color:#00b4d8;">
+        <i class="fas fa-circle" style="color:#3fb950;"></i> Live
+    </span>
+    {% else %}
+    <span class="badge" style="background:#21262d; color:#e57373;">
+        <i class="fas fa-circle"></i> Camera Offline
+    </span>
+    {% endif %}
+</div>
+
+{% if cam_status != 'connected' %}
+<div class="alert" style="background:#21262d; border:1px solid #e57373; color:#e57373;">
+    <i class="fas fa-exclamation-triangle"></i> Camera is not connected. Connect to the dashcam WiFi to adjust settings.
+</div>
+{% endif %}
+
+<div id="settings-toast" class="position-fixed bottom-0 end-0 p-3" style="z-index:9999; display:none;">
+    <div class="toast show" role="alert" id="toast-inner" style="background:#21262d; border:1px solid #30363d;">
+        <div class="toast-body" id="toast-msg" style="color:#c9d1d9;"></div>
+    </div>
+</div>
+
+{% for group, items in settings.items() %}
+<div class="card mb-4">
+    <div class="card-header">
+        <strong>
+            {% if group == 'Video' %}<i class="fas fa-film"></i>
+            {% elif group == 'Camera' %}<i class="fas fa-camera"></i>
+            {% elif group == 'Parking' %}<i class="fas fa-parking"></i>
+            {% else %}<i class="fas fa-cog"></i>{% endif %}
+            {{ group }}
+        </strong>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-dark mb-0" style="border-color:#30363d;">
+            <tbody>
+            {% for setting in items %}
+            <tr data-cmd="{{ setting.cmd }}" style="border-color:#30363d;">
+                <td style="color:#c9d1d9; width:50%; padding:0.75rem 1rem; vertical-align:middle;">
+                    {{ setting.label }}
+                </td>
+                <td style="padding:0.5rem 1rem; vertical-align:middle;">
+                    {% if cam_status == 'connected' %}
+                    <div class="setting-control" id="ctrl-{{ setting.cmd }}">
+                        <span class="text-muted small"><i class="fas fa-spinner fa-spin"></i> loading…</span>
+                    </div>
+                    {% else %}
+                    <span class="text-muted small">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endfor %}
+
+<script>
+function showToast(msg, ok) {
+    var el = document.getElementById('toast-msg');
+    el.textContent = msg;
+    el.style.color = ok ? '#3fb950' : '#e57373';
+    var toast = document.getElementById('settings-toast');
+    toast.style.display = 'block';
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(function() { toast.style.display = 'none'; }, 2500);
+}
+
+function renderControl(cmd, data) {
+    var container = document.getElementById('ctrl-' + cmd);
+    if (!container) return;
+
+    if (data.error) {
+        container.innerHTML = '<span class="text-muted small">' + data.error + '</span>';
+        return;
+    }
+
+    var curValue = data.cur_value || '';
+    var options = data.options || [];
+
+    // WiFi Name / Password: text input
+    if (cmd == 3003 || cmd == 3004) {
+        var type = cmd == 3004 ? 'password' : 'text';
+        container.innerHTML =
+            '<div class="input-group input-group-sm">' +
+            '<input type="' + type + '" class="form-control form-control-sm" style="background:#0d1117;color:#c9d1d9;border-color:#30363d;" value="' + curValue.replace(/"/g, '&quot;') + '" id="input-' + cmd + '">' +
+            '<button class="btn btn-sm btn-outline-secondary" onclick="saveSetting(' + cmd + ', document.getElementById(\'input-' + cmd + '\').value)">Save</button>' +
+            '</div>';
+        return;
+    }
+
+    // Dropdown for everything else
+    var sel = '<select class="form-select form-select-sm" style="background:#0d1117;color:#c9d1d9;border-color:#30363d;" onchange="saveSetting(' + cmd + ', this.value)">';
+    if (options.length === 0) {
+        sel += '<option value="' + curValue + '">' + curValue + '</option>';
+    } else {
+        options.forEach(function(opt) {
+            var selected = (opt === curValue) ? ' selected' : '';
+            sel += '<option value="' + opt + '"' + selected + '>' + opt + '</option>';
+        });
+    }
+    sel += '</select>';
+    container.innerHTML = sel;
+}
+
+function saveSetting(cmd, value) {
+    fetch('/api/cam/setting/' + cmd, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({value: value})
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+        if (res.ok) {
+            showToast('Saved', true);
+        } else {
+            showToast('Error: ' + (res.data.error || 'unknown'), false);
+        }
+    })
+    .catch(function(e) { showToast('Request failed', false); });
+}
+
+{% if cam_status == 'connected' %}
+// Load all settings on page load
+var cmds = [
+    {% for group, items in settings.items() %}
+    {% for setting in items %}{{ setting.cmd }},
+    {% endfor %}
+    {% endfor %}
+];
+
+cmds.forEach(function(cmd) {
+    fetch('/api/cam/setting/' + cmd)
+    .then(function(r) { return r.json(); })
+    .then(function(data) { renderControl(cmd, data); })
+    .catch(function() {
+        var c = document.getElementById('ctrl-' + cmd);
+        if (c) c.innerHTML = '<span class="text-muted small">failed</span>';
+    });
+});
+{% endif %}
+</script>
+{% endblock %}
