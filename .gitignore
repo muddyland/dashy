@@ -5,6 +5,9 @@ videos/locked/*
 videos/tumbnails/*
 videos/downloads.json
 videos/downloads_queue.json
+videos/dashy.db
+videos/downloads.json.migrated
+videos/downloads_queue.json.migrated
 .download-in-progress
 dashy.sqlite
 http_cache.sqlite
