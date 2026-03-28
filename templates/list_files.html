@@ -24,9 +24,9 @@
                 </div>
                 <div class="col-md-6 order-2">
                     <div class="card-body">
-                        <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
+                        <h5 class="card-title fw-bold">{{ video_file.mode }} · {{ video_file.location }}</h5>
+                        <p class="card-text small text-white-50 mb-1">{{ video_file.name }}</p>
                         <p class="card-text small text-white-50 mb-3 text-truncate">{{ video_file.filename }}</p>
-                        <p class="card-text">
                         <div class="d-grid d-md-flex gap-2">
                             <a href="/locked/{{ video_file.filename }}" class="btn btn-success" download><i class="fas fa-save"></i> Download</a>
                             <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ video_file.number }}"><i class="fas fa-trash"></i> Delete</button>

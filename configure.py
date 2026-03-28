@@ -41,6 +41,8 @@ request_timeout = int(os.environ.get('REQUEST_TIMEOUT', 900))
 retention_enabled = os.environ.get('RETENTION_ENABLED', 'true').lower() != 'false'
 # Retention days - clips older than this will be deleted (default: 180 = 6 months)
 retention_days = int(os.environ.get('RETENTION_DAYS', 180))
+# Home Assistant webhook URL - fires after each download cycle (optional)
+ha_webhook_url = os.environ.get('HA_WEBHOOK_URL', None)
 if ssl_enabled:
     if not ssl_cert_path or not ssl_key_path:
         raise ValueError("SSL is enabled but SSL certificate or key path is missing.")
@@ -92,7 +94,8 @@ if __name__ == "__main__":
             "locked_dir": locked_dir,
             "request_timeout": request_timeout,
             "retention_enabled": retention_enabled,
-            "retention_days": retention_days
+            "retention_days": retention_days,
+            "ha_webhook_url": ha_webhook_url
         }, f, indent=4)
         
     print("Configuration file generated successfully.")

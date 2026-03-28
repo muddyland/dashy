@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import requests as http_requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, Response, jsonify
 from viofo import Camera, Downloads, DownloadsDB, CameraStatus
@@ -107,11 +108,20 @@ def downloader_loop():
                     except Exception as e:
                         logger.error(f"Error queuing parking clips: {e}")
 
+                queue_len_before = db.queue_length()
                 download_event.set()
                 try:
                     downloads.download_video(cam=cam)
                 finally:
                     download_event.clear()
+
+                ha_webhook = config_json.get('ha_webhook_url')
+                if ha_webhook and queue_len_before > 0:
+                    try:
+                        http_requests.post(ha_webhook, json={"downloads": queue_len_before}, timeout=10)
+                        logger.info(f"Fired HA webhook: {ha_webhook}")
+                    except Exception as e:
+                        logger.warning(f"Failed to fire HA webhook: {e}")
 
                 time.sleep(10)
                 find_missing_thumbnails()
@@ -146,6 +156,18 @@ def upload_file():
         return "No file URL"
     db.append_download_queue(file_url)
     return f"Appended {file_url} to the downloads queue"
+
+@app.route('/storage/grab_all', methods=['POST'])
+def grab_all():
+    db = DownloadsDB(config)
+    data = request.get_json()
+    if not data or 'files' not in data:
+        return jsonify({"error": "No files provided"}), 400
+    queued = 0
+    for file_url in data['files']:
+        db.append_download_queue(file_url)
+        queued += 1
+    return jsonify({"queued": queued})
 
 def get_video_files():
     video_files = []
@@ -249,6 +271,11 @@ def delete_file():
     file_path = os.path.join(downloads.download_path, filename)
     if os.path.exists(file_path):
         os.remove(file_path)
+        thumbnail = os.path.join(downloads.thumbnail_path, filename.replace('.MP4', '.jpg'))
+        if os.path.exists(thumbnail):
+            os.remove(thumbnail)
+        db = DownloadsDB(config)
+        db.remove_downloaded(filename)
         return jsonify({"message": f"{filename} deleted successfully."}), 200
     return jsonify({"error": f"File '{filename}' not found."}), 404
 

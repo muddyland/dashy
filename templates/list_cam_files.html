@@ -2,53 +2,83 @@
 {% block title %}{% if parking %}Parking{% else %}Driving{% endif %} Files{% endblock %}
 {% block content %}
 <script>
-    function updateDownloadCountAndQueue() {
-        $.get('/api/queue_len', function(data) {
-            $('#download-count').text(data.count);
-        });
-
-        $.get('/api/queue', function(data) {
-            $('#queue-dropdown').empty();
-            if (data.queue.length > 0) {
-                data.queue.forEach(function(item) {
-                    $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">' + item + '</a></li>');
-                });
+    function grabFromCamera(passed_as_arg, button) {
+        fetch("/storage/grab?file=" + encodeURIComponent(passed_as_arg), {
+            method: 'GET',
+        }).then(response => {
+            if (response.ok) {
+                button.disabled = true;
+                button.classList.remove('btn-primary');
+                button.classList.add('btn-info');
+                button.innerHTML = '<i class="fa fa-save"></i> In Queue';
+                button.closest('.queue-card').dataset.queued = 'true';
             } else {
-                $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">Nothing in the queue!</a></li>');
+                console.error('Failed to grab file.');
+            }
+        }).catch(error => {
+            console.error('An error occurred:', error);
+        });
+    }
+
+    function queueAll() {
+        var files = [];
+        document.querySelectorAll('.queue-card[data-queued="false"]').forEach(function(card) {
+            files.push(card.dataset.fileUrl);
+        });
+        if (files.length === 0) return;
+        fetch('/storage/grab_all', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({files: files})
+        }).then(function() {
+            document.querySelectorAll('.queue-card[data-queued="false"] .grab-btn').forEach(function(btn) {
+                btn.disabled = true;
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-info');
+                btn.innerHTML = '<i class="fa fa-save"></i> In Queue';
+                btn.closest('.queue-card').dataset.queued = 'true';
+            });
+        });
+    }
+
+    function pollProgress() {
+        $.get('/api/progress', function(data) {
+            if (data.active) {
+                var fname = data.filename;
+                var pct = data.percent || 0;
+                document.querySelectorAll('.queue-card').forEach(function(card) {
+                    var cardFile = card.dataset.fileUrl.split('/').pop();
+                    if (cardFile === fname) {
+                        var btn = card.querySelector('.grab-btn');
+                        if (btn && btn.disabled) {
+                            var label = data.total_bytes > 0 ? pct + '%' : 'Downloading...';
+                            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + label;
+                            btn.classList.remove('btn-info');
+                            btn.classList.add('btn-warning');
+                        }
+                    }
+                });
             }
         });
     }
-    function grabFromCamera(passed_as_arg, button) {
-    
-    // Call the /storage/grab?file=passed_as_arg endpoint with GET request
-    // You can use fetch API or other methods to perform the request
-    fetch("/storage/grab?file=" + passed_as_arg, {
-        method: 'GET',
-    }).then(response => {
-        if (response.ok) {
-            updateDownloadCountAndQueue();
-            console.log('File grabbed successfully!');
-            // Update button content upon successful file grab
-            button.disabled = true;
-            button.classList.remove('btn-primary');
-            button.classList.add('btn-info');
-            button.innerHTML = '<i class="fa fa-save"></i> In Queue';
-        } else {
-            console.error('Failed to grab file.');
-        }
-    }).catch(error => {
-        console.error('An error occurred:', error);
-    });
-}
+
+    setInterval(pollProgress, 5000);
 </script>
 <h1 class="mt-5 mb-4">Video Files</h1>
+{% if cam_status == 'connected' and video_files %}
+<div class="mb-3">
+    <button class="btn btn-primary" onclick="queueAll()"><i class="fas fa-cloud-download-alt"></i> Queue All</button>
+</div>
+{% endif %}
 <div class="row">
     {% if error %}
     <div class="alert alert-danger">Cannot connect to camera: {{ error }}</div>
     {% endif %}
     {% if cam_status == 'connected' %}
     {% for video_file in video_files %}
-    <div class="col-md-6 mb-4">
+    <div class="col-md-6 mb-4 queue-card"
+         data-file-url="{{ video_file.dir }}/{{ video_file.filename }}"
+         data-queued="{{ 'false' if not video_file.downloaded and not video_file.in_queue else 'true' }}">
         <div class="card shadow">
             {% if parking %}
             <div class="card-header text-center bg-info">
@@ -68,22 +98,23 @@
                 </div>
                 <div class="col-md-6 order-2">
                     <div class="card-body">
-                        <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
+                        <h5 class="card-title fw-bold">{{ video_file.mode }} · {{ video_file.location }}</h5>
+                        <p class="card-text small text-white-50 mb-1">{{ video_file.name }}</p>
                         <p class="card-text small text-white-50 mb-3 text-truncate">{{ video_file.filename }}</p>
                         <div class="d-grid d-md-flex gap-2">
                             {% if not video_file.downloaded and not video_file.in_queue %}
-                            <button type="button" id="grab-local-{{ video_file.number }}" class="btn btn-primary" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
+                            <button type="button" id="grab-local-{{ video_file.number }}" class="btn btn-primary grab-btn" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
                                 <i class="fas fa-cloud-download-alt"></i> Save Local
                             </button>
                             <a class="btn btn-success" href="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" download>
                                 <i class="fa fa-save"></i> Download
                             </a>
                             {% elif video_file.in_queue %}
-                            <button type="button" class="btn btn-info" disabled>
+                            <button type="button" class="btn btn-info grab-btn" disabled>
                                 <i class="fa fa-save"></i> In Queue
                             </button>
                             {% else %}
-                            <button type="button" class="btn btn-success" disabled>
+                            <button type="button" class="btn btn-success grab-btn" disabled>
                                 <i class="fa fa-save"></i> Downloaded
                             </button>
                             {% endif %}
