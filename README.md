@@ -1,137 +1,159 @@
 # Dashy
-## WARNING:  THIS IS STILL A WORK IN PROGRESS TURN BACK NOW if you want an easy solution
 
-## What is Dashy?
-Dashy is a set of tools to aid in the ingestion, and consumption of Viofo Dashcam footage. Those of us that have a Viofo know exactly how horrible the app is, but how good the hardware is...
-When you pull into the driveway, enable WiFi, and your locked videos will automatically be uploaded to a storage path of your choice (even NFS). Dashy will create thumbnails, and make the downloaded files avalible in a nice Web UI.
+Dashy is a set of tools to aid in the ingestion and consumption of Viofo Dashcam footage. For those of us who love the hardware but hate the app — when you pull into the driveway and enable WiFi, locked clips are automatically downloaded to a storage path of your choice (including NFS). Dashy generates thumbnails and presents everything in a web UI.
 
-Dashy also proxies connections to your dashcam, allowing you to view all clips on the camera, and choose to download those files as well! The idea is to be flexible.
-This is a work in progress, but I will be using it for my personal Dashcam, please keep this in mind...
+Dashy also proxies your dashcam connection, letting you browse all clips on the camera and queue additional downloads from the UI.
 
 ![Dashy Screenshot](screenshot.png)
 
-## Assumptions before installing
+> **Note:** Built around personal use with Viofo hardware. PRs welcome, but expect rough edges.
 
-1. I have only tested with a Viofo A129 Plus Duo (dual cam, 2k and 1080p), others may work
-2. I assume other Dashcams use this type of setup, perhaps they will work too
-3. You are using a Raspberry Pi (1,2,3,3b,4), while this may work with other Distros/Hardware, it is not built for that
-4. You are running as the default Pi user, otherwise you may need to change the user in a few places
-5. You are NOT using WiFi to connect to your home network (you must access via LAN cable when using Dashy, or have a second WiFi card to conenct to your network)
-6. Your Raspberry Pi is close to your vehicle (Vifo cameras can be slow over WiFi)
-7. You know about basics about Python pip, and Raspberry Pi (Debian) Linux. If not, please, please, please at least try to read up on these topics beforehand.
-8. You have python3, python3-pip, and nginx packages installed via apt update and apt install nginx python3 python3-pip
-9. I am using Debian Buster, but did test this on Bookworm with some success
+---
 
+## A note on AI
+
+This project uses AI (Claude) as a development tool to help get work done faster. All AI-generated code is reviewed by a human before being committed to this repository. AI is used as a productivity aid — not a replacement for human judgement or code review.
+
+---
+
+## Supported Hardware
+
+| Camera | Status |
+|---|---|
+| Viofo A229-Plus | Fully supported (default) |
+| Viofo A129-Plus Duo | Fully supported |
+| Other Viofo models | May work — filename parsing is model-specific |
+
+---
 
 ## Install
-### Using Docker (Recommended for A229 Users, can be used by A129 users, but may require more setup)
-As of the latest updates to my code (and a pretty long testing period on my end), I am now using Docker/Kubernetes to run my Dashy application. This approach ensures that all dependencies are managed within a container, making it easier to deploy and maintain.
-#### Steps to Use Docker:
-1. **Install Docker**: If you haven't already, install Docker by following the official [Docker installation guide](https://docs.docker.com/engine/install/).
-2. **Pull the Docker Image**: Use the following command to pull the Dashy Docker image from GitLab's Docker Registry:
+
+### Docker (Recommended)
+
+```bash
+docker run -d \
+  --name dashy \
+  -p 80:80 \
+  -p 8080:8080 \
+  -v $(pwd)/videos:/dashy/videos \
+  -e CAM_MODEL="A229-Plus" \
+  registry.gitlab.com/muddy6910/dashy:main
+```
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAM_MODEL` | `A229-Plus` | Camera model: `A229-Plus` or `A129-Plus` |
+| `CAM_IP` | `192.168.1.254` | Camera IP in hotspot/AP mode |
+| `CAM_WIFI_IP` | _(unset)_ | Camera IP on your home WiFi (A229-Plus only — preferred over AP mode when set) |
+| `CAM_PORT` | `80` | Camera HTTP port |
+| `CAM_PROXY_PORT` | `8080` | Port Dashy uses to proxy the camera UI |
+| `DASHY_PORT` | `5000` | Internal Flask port |
+| `DASHY_PROXY_PORT` | `80` | External port served by Nginx |
+| `DATA_DIR` | `/dashy/videos` | Root directory for videos and thumbnails |
+| `VIDEOS_DIR` | `$DATA_DIR/locked` | Directory for downloaded locked clips |
+| `THUMBNAILS_DIR` | `$DATA_DIR/thumbnails` | Directory for generated thumbnails |
+| `DOWNLOAD_LOCKED` | `true` | Download driving mode locked clips |
+| `DOWNLOAD_PARKING` | `true` | Download parking mode locked clips |
+| `SCRAPE_INTERVAL` | `900` | How often (seconds) to check for new clips |
+| `RECONNECT_INTERVAL` | `300` | How often (seconds) to retry camera connection |
+| `REQUEST_TIMEOUT` | `900` | Download request timeout in seconds |
+| `RETENTION_ENABLED` | `true` | Auto-delete old clips |
+| `RETENTION_DAYS` | `180` | Delete clips older than this many days (6 months default) |
+| `HA_WEBHOOK_URL` | _(unset)_ | Home Assistant webhook URL — fired after each download cycle |
+| `SSL_ENABLED` | `false` | Enable SSL on the Nginx proxy |
+| `SSL_CERT_PATH` | _(unset)_ | Path to SSL certificate (required if SSL enabled) |
+| `SSL_KEY_PATH` | _(unset)_ | Path to SSL private key (required if SSL enabled) |
+
+---
+
+### Raspberry Pi (bare metal)
+
+Tested on Debian Buster and Bookworm. Requires a wired LAN connection — the Pi's WiFi is used to connect to the dashcam.
+
+1. **Install system packages**
    ```bash
-   docker pull registry.gitlab.com/muddy6910/dashy:main
+   sudo apt install python3 python3-pip python3-venv nginx git -y
    ```
-3. **Run the image using docker run**: 
+
+2. **Create the Dashy directory**
    ```bash
-   docker run -d --name dashy -v $(pwd)/videos:/dashy/videos -e CAM_MODEL="A229-Plus" registry.gitlab.com/muddy6910/dashy:main
+   sudo mkdir /opt/dashy
+   sudo chown $USER:$USER /opt/dashy
+   cd /opt/dashy
    ```
-  **Environment Variables** 
-  
-  * CAM_MODEL - A129-Plus or A229-Plus (Default)
-  * CAM_IP - The IP of the camera (when connecting via Hotspot), 192.168.1.254 by default, do not change unless needed
-  * CAM_WIFI_IP - If using an A229-Plus, and connecting to your home network, set this to the IP of the camera on your WiFi Network (if you have to ask, this app is not for you ;). there are plenty of ways to get this info)
-  * DATA_DIR - Directory where Videos and Thumbnails are stored
-  * DOWNLOAD_LOCKED - Do you want to download driving mode locked files from the camera? (Default: True) 
-  * DOWNLOAD_PARKING - Do you want to download locked parking mode clips? (Default: True)
 
-  **These are the most common, Check configure.py for the rest**
- 
+3. **Clone the repo**
+   ```bash
+   git clone https://github.com/muddyland/dashy.git .
+   ```
 
-### Using a Raspberry Pi (Required by A129, will also work for A229)
-1. Install Debian packages
-```bash
-  $ sudo apt install python3 python3-pip nginx git -y 
-```
-2. Create directory for Dashy
-```bash
-$ sudo mkdir /opt/dashy 
-$ sudo chown pi:pi /opt/dashy
-$ cd /opt/dashy
-```
+4. **Install Python dependencies**
+   ```bash
+   pip3 install -r requirements.txt
+   ```
 
-3. Clone Dashy Code (note the dot at the end!)
-```bash  
-  $ git clone https://github.com/muddyland/dashy.git . 
-  $ cd dashy
-```
-4. Install Python Requirements
-```bash  
-  $ pip3 install -R requirements.txt
-```
-5. Copy content of dashy_nginx.conf to /etc/nginx/sites-enabled/dashy.conf
-```bash  
-  $ sudo cp dashy_nginx.conf /etc/nginx/sites-enabled/dashy.conf
-```
+5. **Configure Nginx**
+   ```bash
+   sudo cp dashy_nginx.conf /etc/nginx/sites-enabled/dashy.conf
+   sudo rm /etc/nginx/sites-enabled/default
+   sudo nano /etc/nginx/sites-enabled/dashy.conf
+   ```
+   Check that:
+   - `server_name` matches your hostname or IP
+   - The camera IP matches your camera (default `192.168.1.254`)
+   - `alias` paths match your video and thumbnail directories if non-default
 
-6. Change the nginx config as needed:
+6. **Create your config**
+   ```bash
+   cp config_template.json config.json
+   nano config.json
+   ```
+   Key fields:
+   ```json
+   {
+       "cam_ip": "192.168.1.254",
+       "cam_wifi_ip": "10.x.x.x",
+       "cam_model": "A229-Plus",
+       "video_path": "videos",
+       "download_parking": true,
+       "download_locked": true,
+       "retention_enabled": true,
+       "retention_days": 180
+   }
+   ```
 
-* Make sure the server_name matches your domain or IP address
-* Make sure your camera IP matches the expected 192.168.1.245 (default on most Viofo Cams)
-* Make sure the storage location 'alias' is the correct for video and thumbnail folders, if you are not using the default 
-```bash
-$ sudo nano /etc/nginx/sites-enabled/dashy.conf 
-```
-* NOTE: SSL can be added to the above config, though it is not required to use Dashy locally. I would suggest if you have a domain, use SSL. There are plenty of guides on adding SSL to an Nginx proxy, this is all we have here, you can follow those guides, though I do not reccomend publicly exposing Dashy, and instead keep it internal and use DNS to verify your letsencrypt cert. 
+7. **Enable the systemd service**
+   ```bash
+   sudo cp dashy.service /etc/systemd/system/dashy.service
+   # Edit the service file if your user is not 'pi'
+   sudo systemctl enable dashy
+   sudo systemctl start dashy
+   ```
 
+8. **Access the UI**
 
-1. Remove Default Nginx config
-```bash
-$ sudo rm /etc/nginx/sites-enabled/default
-```
-1. Copy and modify config
-Make sure to change the following:
-```json
-{
-    "cam_ip" : "192.168.1.254", // IP of the camera, in case it is differnt. Both the A129-Plus and A229-Plus use this IP, from my testing
-    "cam_wifi_ip" : "10.x.x.x", // IP of the cam on your WiFi network, currently only the A229-Plus does this, dashy will preffer this IP over AP mode
-    "cam_model" : "A229-Plus", // or A129-Plus, others may work, but the file names may not be the same
-    "video_path" : "videos", // Path where to save videos/thumbnails
-    "download_parking" : true, // Download Parking Mode clips
-    "download_locked" : true // Download Driving Mode clips
-}
-```
+   | Service | URL |
+   |---|---|
+   | Dashy web UI | `http://<your-dashy-ip>/` |
+   | Camera proxy | `http://<your-dashy-ip>:8080/` |
 
-```bash
-$ cp config_template.json config.json
-$ nano config.json 
-```
+---
 
-1. Enable Dashy service - Ensure the user in the service matches your user! (pi by default)
-```bash
-$ sudo cp dashy.service /etc/systemd/system/dashy.service
-$ sudo systemctl enable dashy.service
-$ sudo systemctl start dashy 
-```
+## SSL
 
-1.  Turn on your Dashcam WiFi, ensure Dashy connects to the camera (top right of UI)!
-* The Web UI can be accessed via (port 80):
-```
-http://{your_dashy_ip_or_hostname_here}/
-```
-* Your camera can be accessed via (port 8080) to directly view videos:
-```
-http://{your_dashy_ip_or_hostname}:8080/
-```
+SSL termination is handled by Nginx. Set `SSL_ENABLED=true` and provide paths to your certificate and key via `SSL_CERT_PATH` and `SSL_KEY_PATH`. Dashy is not intended to be publicly exposed — a local DNS + internal Let's Encrypt cert is the recommended approach.
 
-## Plans for this repo
-This repo is for me to play around with, at this time, I am not sure what I am going to do with it. But it is being built around my use-cases, please keep this in mind. 
+---
 
-Open to development help, if you would like to contribute, please open PRs and I will review :)
+## Home Assistant Integration
 
-NOTE: This repo is mirrored to both GitLab and GitHub. I preffer GitLab but also use GitHub. The URLs are below: 
+Set `HA_WEBHOOK_URL` to a Home Assistant webhook URL and Dashy will POST to it after each completed download cycle. Useful for automations like turning on a light when new clips arrive.
 
-- [GitHub](https://github.com/muddyland/dashy)
-- [GitLab](https://gitlab.com/muddy6910/dashy)
+---
 
-#### I hope you enjoy Dashy as much as I do!
+## Links
+
+- [GitLab](https://gitlab.com/muddy6910/dashy) (primary)
+- [GitHub](https://github.com/muddyland/dashy) (mirror)
