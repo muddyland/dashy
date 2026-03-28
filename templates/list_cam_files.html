@@ -60,13 +60,13 @@
             </div>
             {% endif %}
             <div class="row g-0">
-                <div class="col-md-6 order-md-1 order-2">
+                <div class="col-md-6 order-1">
                     <video id="{{ video_file.filename }}_vid" width="100%" controls preload="metadata" playsinline>
                         <source src="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
                         Your browser does not support the video tag.
                     </video>
                 </div>
-                <div class="col-md-6 order-md-2 order-1">
+                <div class="col-md-6 order-2">
                     <div class="card-body">
                         <h5 class="card-title fw-bold">{{ video_file.name }}</h5>
                         <p class="card-text small text-white-50 mb-3 text-truncate">{{ video_file.filename }}</p>
