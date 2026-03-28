@@ -8,11 +8,11 @@
         <div class="card shadow">
             {% if video_file.mode == "Parking" %}
             <div class="card-header text-center bg-info">
-                <span class="text-center">🅿️ Parking Mode ({{ video_file.location }})</span>
+                <span class="text-center"><i class="fas fa-parking"></i> Parking Mode</span>
             </div>
             {% else%}
             <div class="card-header text-center bg-primary">
-                <span class="text-center">🚗 Driving Mode ({{ video_file.location }})</span>
+                <span class="text-center"><i class="fas fa-tachometer-alt"></i> Driving Mode</span>
             </div>
             {% endif %}
             <div class="row g-0">
@@ -24,7 +24,7 @@
                 </div>
                 <div class="col-md-6 order-2">
                     <div class="card-body">
-                        <h5 class="card-title fw-bold">{{ video_file.mode }} · {{ video_file.location }}</h5>
+                        <h5 class="card-title fw-bold">{{ video_file.location }}</h5>
                         <p class="card-text small text-white-50 mb-1">{{ video_file.name }}</p>
                         <p class="card-text small text-white-50 mb-3 text-truncate">{{ video_file.filename }}</p>
                         <div class="d-grid d-md-flex gap-2">

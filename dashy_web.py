@@ -210,8 +210,8 @@ def manifest():
         "short_name": "Dashy",
         "start_url": "/",
         "display": "standalone",
-        "background_color": "#ffffff",
-        "theme_color": "#ff0000",
+        "background_color": "#0d1117",
+        "theme_color": "#00b4d8",
         "icons": [{"src": "/static/img/car_emoji.png", "sizes": "192x192", "type": "image/png"}]
     })
 

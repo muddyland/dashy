@@ -3,6 +3,12 @@ $(document).ready(function() {
         return (bytes / 1048576).toFixed(1) + ' MB';
     }
 
+    function getVideoId(filename) {
+        var parts = filename.replace('.MP4', '').split('_');
+        var id = parts.length >= 4 ? parts[3] : (parts[1] || filename);
+        return id.replace(/^0+/, '');
+    }
+
     function updateQueueAndProgress() {
         $.when(
             $.get('/api/queue'),
@@ -25,38 +31,37 @@ $(document).ready(function() {
             if (progress.active) {
                 var pct = progress.percent || 0;
                 var barWidth = progress.total_bytes > 0 ? pct + '%' : '100%';
-                var barClass = progress.total_bytes > 0
-                    ? 'progress-bar progress-bar-striped progress-bar-animated bg-success'
-                    : 'progress-bar progress-bar-striped progress-bar-animated bg-success w-100';
                 var sizeLabel = progress.total_bytes > 0
                     ? pct + '% &mdash; ' + formatMB(progress.bytes_downloaded) + ' / ' + formatMB(progress.total_bytes)
                     : formatMB(progress.bytes_downloaded) + ' downloaded';
+                var dateLabel = getVideoId(progress.filename);
 
                 $('#queue-dropdown').append(
                     '<li>' +
                     '<div class="px-3 py-2" style="max-width:280px;">' +
-                    '<small class="text-white-50">Downloading:</small><br>' +
-                    '<small class="d-block text-truncate">' + progress.filename + '</small>' +
-                    '<div class="progress mt-1" style="height: 6px;">' +
-                    '<div class="' + barClass + '" role="progressbar" style="width:' + barWidth + '"></div>' +
+                    '<small style="color:#00b4d8;"><span class="queue-pulse">&#9679;</span> Downloading</small><br>' +
+                    '<small class="d-block" style="color:#eceff4;">' + dateLabel + '</small>' +
+                    '<div class="progress mt-1" style="height: 4px; background:#21262d;">' +
+                    '<div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:' + barWidth + '; background:#00b4d8;"></div>' +
                     '</div>' +
-                    '<small class="text-white-50">' + sizeLabel + '</small>' +
+                    '<small style="color:#484f58;">' + sizeLabel + '</small>' +
                     '</div>' +
                     '</li>'
                 );
 
                 if (pendingQueue.length > 0) {
-                    $('#queue-dropdown').append('<li><hr class="dropdown-divider"></li>');
+                    $('#queue-dropdown').append('<li><hr class="dropdown-divider" style="border-color:#21262d;"></li>');
                 }
             }
 
             if (pendingQueue.length > 0) {
                 pendingQueue.forEach(function(item) {
                     var fname = item.split('/').pop();
-                    $('#queue-dropdown').append('<li><a class="dropdown-item text-truncate d-block" style="max-width:280px;" href="#">' + fname + '</a></li>');
+                    var dateLabel = getVideoId(fname);
+                    $('#queue-dropdown').append('<li><a class="dropdown-item" style="max-width:280px; color:#c9d1d9;" href="#"><i class="fas fa-hourglass-half" style="color:#484f58;"></i> ' + dateLabel + '</a></li>');
                 });
             } else if (!progress.active) {
-                $('#queue-dropdown').append('<li><a class="dropdown-item" href="#">Nothing in the queue!</a></li>');
+                $('#queue-dropdown').append('<li><a class="dropdown-item" style="color:#484f58;" href="#"><i class="fas fa-check-circle" style="color:#00b4d8;"></i> Queue empty</a></li>');
             }
         });
     }
