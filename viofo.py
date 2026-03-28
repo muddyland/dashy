@@ -276,27 +276,33 @@ class Downloads:
                             
                         file_name = file_url.split('/')[-1]
                         file_path = f'{self.download_path}/{file_name}'
-                        
+                        tmp_path = file_path + '.tmp'
+
                         total_bytes = 0
                         bytes_downloaded = 0
-                        with requests.get(self.base_url + file_url, stream=True, timeout=self.timeout) as response:
-                            if response.status_code == 200:
-                                total_bytes = int(response.headers.get('Content-Length', 0))
-                                chunk_count = 0
-                                with open(file_path, "wb+") as temp_file:
-                                    logger.info(f"Downloading from URL: {self.base_url}{file_url} to {temp_file.name}")
-                                    for chunk in response.iter_content(chunk_size=2048):
-                                        if chunk:
-                                            temp_file.write(chunk)
-                                            bytes_downloaded += len(chunk)
-                                            chunk_count += 1
-                                            if chunk_count % 1024 == 0:
-                                                self.db.set_progress(file_url, bytes_downloaded, total_bytes)
-
+                        try:
+                            with requests.get(self.base_url + file_url, stream=True, timeout=self.timeout) as response:
+                                if response.status_code == 200:
+                                    total_bytes = int(response.headers.get('Content-Length', 0))
+                                    chunk_count = 0
+                                    with open(tmp_path, "wb+") as tmp_file:
+                                        logger.info(f"Downloading from URL: {self.base_url}{file_url} to {tmp_path}")
+                                        for chunk in response.iter_content(chunk_size=2048):
+                                            if chunk:
+                                                tmp_file.write(chunk)
+                                                bytes_downloaded += len(chunk)
+                                                chunk_count += 1
+                                                if chunk_count % 1024 == 0:
+                                                    self.db.set_progress(file_url, bytes_downloaded, total_bytes)
+                                    os.rename(tmp_path, file_path)
                                     logger.info(f"File successfully downloaded and moved to: {file_path}")
-                            else:
-                                logger.error("Failed to download file {} Status: {}".format(file_url, response.status_code))
-                                continue
+                                else:
+                                    logger.error("Failed to download file {} Status: {}".format(file_url, response.status_code))
+                                    continue
+                        except Exception:
+                            if os.path.exists(tmp_path):
+                                os.remove(tmp_path)
+                            raise
 
                         # Append file to downloaded_files list, keep track of the downloads
                         downloaded_files = self.db.load_downloaded_files()
@@ -344,6 +350,7 @@ class DownloadsDB:
                     updated_at TEXT
                 )
             """)
+            conn.execute("DELETE FROM progress")
 
     def _migrate_json(self, video_path):
         old_db_path = f"{video_path}/downloads.json"
@@ -430,4 +437,8 @@ class DownloadsDB:
     def clear_progress(self, url):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM progress WHERE url = ?", (url,))
+
+    def remove_downloaded(self, filename):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM downloaded WHERE url LIKE ?", (f'%/{filename}',))
 

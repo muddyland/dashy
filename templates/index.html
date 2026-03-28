@@ -49,5 +49,11 @@
         </div>
     </div>
     {% endfor %}
+    {% if not video_files %}
+    <div class="col-12 text-center mt-5">
+        <p class="text-white-50 fs-5">No videos downloaded yet.</p>
+        <p class="text-white-50">Connect your dashcam and locked clips will appear here automatically.</p>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}

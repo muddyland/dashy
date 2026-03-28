@@ -62,6 +62,7 @@ def cleanup_old_files():
         return
     retention_days = config_json.get('retention_days', 180)
     cutoff = datetime.now() - timedelta(days=retention_days)
+    db = DownloadsDB(config)
     deleted = 0
     for file_name in os.listdir(downloads.download_path):
         if not file_name.endswith('.MP4'):
@@ -73,6 +74,7 @@ def cleanup_old_files():
                 thumbnail = os.path.join(downloads.thumbnail_path, file_name.replace('.MP4', '.jpg'))
                 if os.path.exists(thumbnail):
                     os.remove(thumbnail)
+                db.remove_downloaded(file_name)
                 logger.info(f"Deleted old clip: {file_name}")
                 deleted += 1
             except Exception as e:
