@@ -62,7 +62,9 @@ body {
     box-shadow: 0 0 6px rgba(0, 180, 216, 0.4);
     border-radius: 4px;
 }
-.connected-btn:hover {
+.connected-btn:hover,
+.connected-btn:focus,
+.connected-btn.show {
     color: #48cae4;
     border-color: #48cae4;
     box-shadow: 0 0 10px rgba(0, 180, 216, 0.7);
