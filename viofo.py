@@ -332,6 +332,7 @@ class DownloadsDB:
         self._migrate_json(config_data['video_path'])
 
     def _init_db(self):
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS downloaded (url TEXT PRIMARY KEY)")
             conn.execute("CREATE TABLE IF NOT EXISTS queue (url TEXT PRIMARY KEY)")

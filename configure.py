@@ -96,31 +96,19 @@ if __name__ == "__main__":
     os.chmod("/dashy", 0o755)
     print("Set dashy dir permissions successfully.")
     
-    # Check to make sure the data_dir exists and is writable
-    if not os.path.exists(data_dir):
-        print("Data directory does not exist. Creating it...")
-        os.makedirs(data_dir)
-    if not os.access(data_dir, os.W_OK):
-        # Set permissions for the data_dir
-        os.chmod(data_dir, 0o755)
-        os.chown(data_dir, 1000, 1000)
-        print("Set data dir permissions successfully.")
-        
-    # Check to make sure thumbnail and locked video directories exist and are writable
-    if not os.path.exists(thumbnails_dir):
-        print("Thumbnails directory does not exist. Creating it...")
-        os.makedirs(thumbnails_dir)
-    if not os.access(thumbnails_dir, os.W_OK):
-        # Set permissions for the thumbnails_dir
-        os.chmod(thumbnails_dir, 0o755)
-        os.chown(thumbnails_dir, 1000, 1000)
-        print("Permissions set for thumbnails directory.")
-        
-    if not os.path.exists(locked_dir):
-        print("Locked videos directory does not exist. Creating it...")
-        os.makedirs(locked_dir)
-    if not os.access(locked_dir, os.W_OK):
-        # Set permissions for the locked_videos_dir
-        os.chmod(locked_dir, 0o755)
-        os.chown(locked_dir, 1000, 1000)
-        print("Permissions set for locked videos directory.")
+    # Ensure data directories exist and are owned by the dashy user.
+    # os.access() runs as root so always returns True — always chown explicitly.
+    os.makedirs(data_dir, exist_ok=True)
+    os.chmod(data_dir, 0o755)
+    os.chown(data_dir, 1000, 1000)
+    print("Set data dir permissions successfully.")
+
+    os.makedirs(thumbnails_dir, exist_ok=True)
+    os.chmod(thumbnails_dir, 0o755)
+    os.chown(thumbnails_dir, 1000, 1000)
+    print("Permissions set for thumbnails directory.")
+
+    os.makedirs(locked_dir, exist_ok=True)
+    os.chmod(locked_dir, 0o755)
+    os.chown(locked_dir, 1000, 1000)
+    print("Permissions set for locked videos directory.")
