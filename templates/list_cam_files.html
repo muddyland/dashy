@@ -1,6 +1,119 @@
 {% extends 'main.html' %}
-{% block title %}{% if parking %}Parking{% else %}Driving{% endif %} Files{% endblock %}
+{% block title %}{% if parking %}Parking{% else %}Driving{% endif %} — {% if locked %}Locked{% else %}All{% endif %} Clips{% endblock %}
 {% block content %}
+
+<!-- Heading -->
+<div class="d-flex align-items-center justify-content-between mt-4 mb-3">
+    <h4 class="mb-0">
+        {% if parking %}<i class="fas fa-parking"></i> Parking{% else %}<i class="fas fa-tachometer-alt"></i> Driving{% endif %}
+        <span style="color:#484f58; font-weight:400;"> — {% if locked %}Locked{% else %}All{% endif %} Clips</span>
+        {% if cam_status == 'connected' and video_files %}
+        <span class="badge ms-2" style="background:#21262d; color:#00b4d8; font-size:0.75rem;">{{ total_items }}</span>
+        {% endif %}
+    </h4>
+    {% if cam_status == 'connected' and video_files %}
+    <button class="btn btn-primary btn-sm" onclick="queueAll()"><i class="fas fa-cloud-download-alt"></i> Queue All</button>
+    {% endif %}
+</div>
+
+{% if error %}
+<div class="alert mt-3" style="background:#3d0a1a; border-color:#c0392b; color:#e57373;">
+    <i class="fas fa-exclamation-triangle"></i> Cannot connect to camera: {{ error }}
+</div>
+{% endif %}
+
+{% if cam_status == 'connected' %}
+
+<!-- Clip Grid -->
+<div class="row">
+    {% for video_file in video_files %}
+    <div class="col-md-6 mb-4 queue-card"
+         data-file-url="{{ video_file.dir }}/{{ video_file.filename }}"
+         data-queued="{{ 'false' if not video_file.downloaded and not video_file.in_queue else 'true' }}">
+        <div class="card shadow">
+            {% if parking %}
+            <div class="card-header text-center bg-info">
+                <span class="text-center"><i class="fas fa-parking"></i> Parking Mode</span>
+            </div>
+            {% else %}
+            <div class="card-header text-center bg-primary">
+                <span class="text-center"><i class="fas fa-tachometer-alt"></i> Driving Mode</span>
+            </div>
+            {% endif %}
+            <div class="row g-0">
+                <div class="col-md-6 order-1">
+                    <video id="{{ video_file.filename }}_vid" width="100%" controls preload="metadata" playsinline>
+                        <source src="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+                <div class="col-md-6 order-2">
+                    <div class="card-body">
+                        <h5 class="card-title fw-bold">{{ video_file.location }}</h5>
+                        <p class="card-text small text-white-50 mb-3">{{ video_file.name }}</p>
+                        <div class="d-grid d-md-flex gap-2">
+                            {% if not video_file.downloaded and not video_file.in_queue %}
+                            <button type="button" id="grab-local-{{ video_file.number }}" class="btn btn-primary grab-btn" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
+                                <i class="fas fa-cloud-download-alt"></i> Save Local
+                            </button>
+                            <a class="btn btn-success" href="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" download>
+                                <i class="fa fa-save"></i> Download
+                            </a>
+                            {% elif video_file.in_queue %}
+                            <button type="button" class="btn btn-info grab-btn" disabled>
+                                <i class="fa fa-save"></i> In Queue
+                            </button>
+                            {% else %}
+                            <button type="button" class="btn btn-success grab-btn" disabled>
+                                <i class="fa fa-check"></i> Downloaded
+                            </button>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% if not video_files %}
+    <div class="col-12 text-center mt-5">
+        <i class="fas fa-folder-open" style="font-size:3rem; color:#484f58;"></i>
+        <p class="mt-3 fs-5" style="color:#484f58;">
+            No {% if parking %}parking{% else %}driving{% endif %} clips found on the camera.
+        </p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Pagination -->
+{% if total_items > per_page %}
+<div class="d-flex align-items-center justify-content-between mt-2 mb-4">
+    <small style="color:#484f58;">Clips {{ start_idx + 1 }}–{{ end_idx }} of {{ total_items }}</small>
+    <nav>
+        <ul class="pagination mb-0">
+            <li class="page-item {% if not has_prev %}disabled{% endif %}">
+                <a class="page-link" href="?page={{ page - 1 }}{% if parking %}&parking=True{% endif %}">&#8592; Prev</a>
+            </li>
+            <li class="page-item disabled">
+                <span class="page-link" style="color:#484f58;">{{ page }} / {{ ((total_items - 1) // per_page) + 1 }}</span>
+            </li>
+            <li class="page-item {% if not has_next %}disabled{% endif %}">
+                <a class="page-link" href="?page={{ page + 1 }}{% if parking %}&parking=True{% endif %}">Next &#8594;</a>
+            </li>
+        </ul>
+    </nav>
+</div>
+{% endif %}
+
+{% else %}
+<div class="col-12 text-center mt-5">
+    <i class="fas fa-plug" style="font-size:3rem; color:#484f58;"></i>
+    <p class="mt-3 fs-5" style="color:#484f58;">Camera is not connected.</p>
+    <p style="color:#484f58;">Enable your dashcam WiFi to browse clips.</p>
+</div>
+{% endif %}
+
 <script>
     function grabFromCamera(passed_as_arg, button) {
         fetch("/storage/grab?file=" + encodeURIComponent(passed_as_arg), {
@@ -64,86 +177,5 @@
 
     setInterval(pollProgress, 5000);
 </script>
-<h1 class="mt-5 mb-4">Video Files</h1>
-{% if cam_status == 'connected' and video_files %}
-<div class="mb-3">
-    <button class="btn btn-primary" onclick="queueAll()"><i class="fas fa-cloud-download-alt"></i> Queue All</button>
-</div>
-{% endif %}
-<div class="row">
-    {% if error %}
-    <div class="alert alert-danger">Cannot connect to camera: {{ error }}</div>
-    {% endif %}
-    {% if cam_status == 'connected' %}
-    {% for video_file in video_files %}
-    <div class="col-md-6 mb-4 queue-card"
-         data-file-url="{{ video_file.dir }}/{{ video_file.filename }}"
-         data-queued="{{ 'false' if not video_file.downloaded and not video_file.in_queue else 'true' }}">
-        <div class="card shadow">
-            {% if parking %}
-            <div class="card-header text-center bg-info">
-                <span class="text-center">🅿️ Parking Mode ({{ video_file.location }})</span>
-            </div>
-            {% else%}
-            <div class="card-header text-center bg-primary">
-                <span class="text-center">🚗 Driving Mode ({{ video_file.location }})</span>
-            </div>
-            {% endif %}
-            <div class="row g-0">
-                <div class="col-md-6 order-1">
-                    <video id="{{ video_file.filename }}_vid" width="100%" controls preload="metadata" playsinline>
-                        <source src="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                </div>
-                <div class="col-md-6 order-2">
-                    <div class="card-body">
-                        <h5 class="card-title fw-bold">{{ video_file.mode }} · {{ video_file.location }}</h5>
-                        <p class="card-text small text-white-50 mb-1">{{ video_file.name }}</p>
-                        <p class="card-text small text-white-50 mb-3 text-truncate">{{ video_file.filename }}</p>
-                        <div class="d-grid d-md-flex gap-2">
-                            {% if not video_file.downloaded and not video_file.in_queue %}
-                            <button type="button" id="grab-local-{{ video_file.number }}" class="btn btn-primary grab-btn" onclick="grabFromCamera('{{ video_file.dir }}/{{ video_file.filename }}', this)">
-                                <i class="fas fa-cloud-download-alt"></i> Save Local
-                            </button>
-                            <a class="btn btn-success" href="{{ cam_proxy }}{{ video_file.dir }}/{{ video_file.filename }}" download>
-                                <i class="fa fa-save"></i> Download
-                            </a>
-                            {% elif video_file.in_queue %}
-                            <button type="button" class="btn btn-info grab-btn" disabled>
-                                <i class="fa fa-save"></i> In Queue
-                            </button>
-                            {% else %}
-                            <button type="button" class="btn btn-success grab-btn" disabled>
-                                <i class="fa fa-save"></i> Downloaded
-                            </button>
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    {% endfor %}
-</div>
-
-{% if total_items > per_page %}
-<nav aria-label="Page navigation">
-    <ul class="pagination justify-content-center align-items-center">
-        <li class="page-item {% if not has_prev %}disabled{% endif %}">
-            <a class="page-link" href="?page={{ page - 1 }}{% if parking %}&parking=True{% endif %}">&#8592; Prev</a>
-        </li>
-        <li class="page-item disabled">
-            <span class="page-link text-white-50">Page {{ page }} of {{ ((total_items - 1) // per_page) + 1 }}</span>
-        </li>
-        <li class="page-item {% if not has_next %}disabled{% endif %}">
-            <a class="page-link" href="?page={{ page + 1 }}{% if parking %}&parking=True{% endif %}">Next &#8594;</a>
-        </li>
-    </ul>
-</nav>
-{% endif %}
-{% else %}
-<b>Camera is not connected, you are not able to use this page...</b>
-{% endif %}
 
 {% endblock %}

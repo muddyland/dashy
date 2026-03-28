@@ -2,59 +2,100 @@
 
 {% block title %}Home{% endblock %}
 {% block content %}
-<div class="container mt-5 d-none d-md-block">
-    <h3 class="text-center">What is Dashy?</h3>
-    <p>
-        Dashy is a web app, and script which aid in the ingestion of Viofo Dashcam footage. When you pull into the driveway, enable WiFi, and your locked videos will automatically be uploaded to a storage path of your choice (even NFS).
-    </p>
-    <p>
-        Dashy also proxies connections to your dashcam, allowing you to view all clips on the camera, and choose to download those files as well!
-    </p>
-    <p>
-        This is a work in progress, but I will be using it for my personal Dashcam, please keep this in mind,,,
-    </p>
+
+<!-- Stats Bar -->
+<div class="row mt-4 mb-4 g-3">
+    <div class="col-6 col-md-4">
+        <div class="card text-center py-3">
+            <div style="color:#00b4d8; font-size:1.6rem; font-weight:700;">{{ total_clips }}</div>
+            <div class="small" style="color:#484f58;"><i class="fas fa-film"></i> Clips Stored</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-4">
+        <div class="card text-center py-3">
+            {% if cam_status == 'connected' %}
+            <div style="color:#00b4d8; font-size:1.6rem; font-weight:700;"><i class="fas fa-circle" style="font-size:1rem;"></i> Online</div>
+            {% else %}
+            <div style="color:#e57373; font-size:1.6rem; font-weight:700;"><i class="fas fa-circle" style="font-size:1rem;"></i> Offline</div>
+            {% endif %}
+            <div class="small" style="color:#484f58;"><i class="fas fa-camera"></i> Camera</div>
+        </div>
+    </div>
+    <div class="col-12 col-md-4">
+        <div class="card text-center py-3">
+            <div style="color:#00b4d8; font-size:1.1rem; font-weight:700;">
+                {% if last_download %}{{ last_download }}{% else %}—{% endif %}
+            </div>
+            <div class="small" style="color:#484f58;"><i class="fas fa-clock"></i> Last Download</div>
+        </div>
+    </div>
 </div>
 
-    <h1 class="mt-5 mb-4">Latest Downloads</h1>
-    <div class="row">
-    {% for video_file in video_files %}
-    <div class="col-md-6 mb-4">
-        <div class="card shadow">
-            {% if video_file.mode == "Parking" %}
-            <div class="card-header text-center bg-info">
-                <span class="text-center"><i class="fas fa-parking"></i> Parking Mode</span>
+<!-- Latest Downloads -->
+<div class="d-flex align-items-center justify-content-between mb-4">
+    <h4 class="mb-0">Latest Downloads
+        <span class="badge ms-2" style="background:#21262d; color:#00b4d8; font-size:0.75rem;">
+            {{ video_files|length }} of {{ total_clips }}
+        </span>
+    </h4>
+    {% if total_clips > 0 %}
+    <a href="/storage/locked" class="btn btn-secondary btn-sm"><i class="fas fa-th"></i> View All</a>
+    {% endif %}
+</div>
+
+<div class="row">
+{% for video_file in video_files %}
+<div class="col-md-6 mb-4">
+    <div class="card shadow">
+        {% if video_file.mode == "Parking" %}
+        <div class="card-header text-center bg-info">
+            <span class="text-center"><i class="fas fa-parking"></i> Parking Mode</span>
+        </div>
+        {% else %}
+        <div class="card-header text-center bg-primary">
+            <span class="text-center"><i class="fas fa-tachometer-alt"></i> Driving Mode</span>
+        </div>
+        {% endif %}
+        <div class="row g-0">
+            <div class="col-md-6 order-1">
+                <video width="100%" controls preload="metadata" playsinline poster="{{ hostname }}:{{ proxy_port }}/thumbnails/{{ video_file.thumbnail }}">
+                    <source src="{{ hostname }}:{{ proxy_port }}/locked/{{ video_file.filename }}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
             </div>
-            {% else%}
-            <div class="card-header text-center bg-primary">
-                <span class="text-center"><i class="fas fa-tachometer-alt"></i> Driving Mode</span>
-            </div>
-            {% endif %}
-            <div class="row g-0">
-                <div class="col-md-6 order-1">
-                    <video width="100%" controls preload="metadata" playsinline poster="{{ hostname }}:{{ proxy_port }}/thumbnails/{{ video_file.thumbnail }}">
-                        <source src="{{ hostname }}:{{ proxy_port }}/locked/{{ video_file.filename }}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                </div>
-                <div class="col-md-6 order-2">
-                    <div class="card-body">
-                        <h5 class="card-title fw-bold">{{ video_file.location }}</h5>
-                        <p class="card-text small text-white-50 mb-1">{{ video_file.name }}</p>
-                        <p class="card-text small text-white-50 mb-3 text-truncate">{{ video_file.filename }}</p>
-                        <div class="d-grid d-md-flex gap-2">
-                            <a href="/locked/{{ video_file.filename }}" class="btn btn-success" download><i class="fas fa-save"></i> Download</a>
-                        </div>
+            <div class="col-md-6 order-2">
+                <div class="card-body">
+                    <h5 class="card-title fw-bold">{{ video_file.location }}</h5>
+                    <p class="card-text small text-white-50 mb-3">{{ video_file.name }}</p>
+                    <div class="d-grid d-md-flex gap-2">
+                        <a href="/locked/{{ video_file.filename }}" class="btn btn-success" download><i class="fas fa-save"></i> Download</a>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    {% endfor %}
-    {% if not video_files %}
-    <div class="col-12 text-center mt-5">
-        <p class="text-white-50 fs-5">No videos downloaded yet.</p>
-        <p class="text-white-50">Connect your dashcam and locked clips will appear here automatically.</p>
-    </div>
+</div>
+{% endfor %}
+
+{% if not video_files %}
+<div class="col-12 text-center mt-5">
+    {% if cam_status == 'connected' %}
+    <i class="fas fa-camera" style="font-size:3rem; color:#00b4d8;"></i>
+    <p class="mt-3 fs-5" style="color:#484f58;">Camera connected — waiting for locked clips.</p>
+    <p style="color:#484f58;">Clips will appear here once downloaded.</p>
+    {% else %}
+    <i class="fas fa-plug" style="font-size:3rem; color:#484f58;"></i>
+    <p class="mt-3 fs-5" style="color:#484f58;">No clips downloaded yet.</p>
+    <p style="color:#484f58;">Connect your dashcam WiFi and locked clips will appear here automatically.</p>
     {% endif %}
 </div>
+{% endif %}
+</div>
+
+{% if total_clips > video_files|length %}
+<div class="text-center mt-2 mb-4">
+    <a href="/storage/locked" class="btn btn-secondary"><i class="fas fa-th"></i> View All {{ total_clips }} Clips</a>
+</div>
+{% endif %}
+
 {% endblock %}

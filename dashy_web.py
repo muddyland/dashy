@@ -191,17 +191,21 @@ if config_json.get("no_proxy", False):
 def index():
     cam_proxy = "http://" + str(str(request.host).split(":")[0])
     video_files = get_video_files()
+    total_clips = len(video_files)
     per_page = 6
     page = 1
     start_idx = (page - 1) * per_page
-    end_idx = min(page * per_page, len(video_files))
+    end_idx = min(page * per_page, total_clips)
     video_files_paginated = video_files[start_idx:end_idx]
+    last_download = video_files[0].get('name') if video_files else None
     return render_template('index.html',
                            cam_status=cam_status.connected_string,
                            hostname=cam_proxy,
                            proxy_port=config_json.get("dashy_proxy_port", 80),
                            cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}",
-                           video_files=video_files_paginated)
+                           video_files=video_files_paginated,
+                           total_clips=total_clips,
+                           last_download=last_download)
 
 @app.route('/manifest.json')
 def manifest():
@@ -282,10 +286,16 @@ def delete_file():
 @app.route('/storage/locked')
 def list_files():
     video_files = get_video_files()
+    mode_filter = request.args.get('mode', 'all')
+    if mode_filter == 'driving':
+        video_files = [f for f in video_files if f.get('mode') == 'Driving']
+    elif mode_filter == 'parking':
+        video_files = [f for f in video_files if f.get('mode') == 'Parking']
     per_page = 14
     page = request.args.get('page', 1, type=int)
+    total_items = len(video_files)
     start_idx = (page - 1) * per_page
-    end_idx = min(page * per_page, len(video_files))
+    end_idx = min(page * per_page, total_items)
     video_files_paginated = video_files[start_idx:end_idx]
     hostname = "http://" + str(str(request.host).split(":")[0])
     return render_template('list_files.html',
@@ -293,10 +303,13 @@ def list_files():
                            hostname=hostname,
                            proxy_port=config_json.get("dashy_proxy_port", 80),
                            has_prev=page > 1,
-                           has_next=end_idx < len(video_files),
-                           total_items=len(video_files),
+                           has_next=end_idx < total_items,
+                           total_items=total_items,
                            per_page=per_page,
                            page=page,
+                           mode_filter=mode_filter,
+                           start_idx=start_idx,
+                           end_idx=end_idx,
                            cam_status=cam_status.connected_string,
                            cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}")
 
@@ -304,25 +317,31 @@ def list_files():
 def list_all_cam_files():
     try:
         parking = request.args.get('parking', False, type=bool)
+        force = request.args.get('force', False, type=bool)
         mode = "parking" if parking else "driving"
         video_files = cam.scrape_webserver(mode=mode, locked=False)
         per_page = 14
         page = request.args.get('page', 1, type=int)
+        total_items = len(video_files)
         start_idx = (page - 1) * per_page
-        end_idx = min(page * per_page, len(video_files))
+        end_idx = min(page * per_page, total_items)
         hostname = "http://" + str(str(request.host).split(":")[0]) + str(config_json.get("cam_proxy_port", 8080))
+        effective_status = 'connected' if force else cam_status.connected_string
         return render_template('list_cam_files.html',
                                video_files=video_files[start_idx:end_idx],
                                hostname=hostname,
                                proxy_port=config_json.get("dashy_proxy_port", 80),
                                has_prev=page > 1,
-                               has_next=end_idx < len(video_files),
-                               total_items=len(video_files),
+                               has_next=end_idx < total_items,
+                               total_items=total_items,
                                per_page=per_page,
                                page=page,
-                               cam_status=cam_status.connected_string,
+                               start_idx=start_idx,
+                               end_idx=end_idx,
+                               cam_status=effective_status,
                                cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}",
-                               parking=parking)
+                               parking=parking,
+                               locked=False)
     except Exception as e:
         return render_template('list_cam_files.html', video_files=[], error=f"Exception: {e}")
 
@@ -330,25 +349,30 @@ def list_all_cam_files():
 def list_cam_files():
     try:
         parking = request.args.get('parking', False, type=bool)
+        force = request.args.get('force', False, type=bool)
         mode = "parking" if parking else "driving"
         video_files = cam.scrape_webserver(mode=mode, locked=True)
         per_page = 14
         page = request.args.get('page', 1, type=int)
+        total_items = len(video_files)
         start_idx = (page - 1) * per_page
-        end_idx = min(page * per_page, len(video_files))
+        end_idx = min(page * per_page, total_items)
         hostname = "http://" + str(str(request.host).split(":")[0]) + str(config_json.get("cam_proxy_port", 8080))
         return render_template('list_cam_files.html',
                                video_files=video_files[start_idx:end_idx],
                                hostname=hostname,
                                proxy_port=config_json.get("dashy_proxy_port", 80),
                                has_prev=page > 1,
-                               has_next=end_idx < len(video_files),
-                               total_items=len(video_files),
+                               has_next=end_idx < total_items,
+                               total_items=total_items,
                                per_page=per_page,
                                page=page,
-                               cam_status=cam_status.connected_string,
+                               start_idx=start_idx,
+                               end_idx=end_idx,
+                               cam_status='connected' if force else cam_status.connected_string,
                                cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}",
-                               parking=parking)
+                               parking=parking,
+                               locked=True)
     except Exception as e:
         return render_template('list_cam_files.html', video_files=[], error=f"Exception: {e}")
 
