@@ -53,25 +53,25 @@
 <!-- Info Cards -->
 <div class="row g-3 mb-4">
     <div class="col-6 col-md-3">
-        <div class="card text-center py-3">
+        <div class="card text-center py-3 h-100 d-flex flex-column align-items-center justify-content-center">
             <div id="info-state" style="color:#484f58; font-size:1.2rem; font-weight:700;">—</div>
             <div class="small" style="color:#484f58;"><i class="fas fa-circle"></i> State</div>
         </div>
     </div>
     <div class="col-6 col-md-3">
-        <div class="card text-center py-3">
+        <div class="card text-center py-3 h-100 d-flex flex-column align-items-center justify-content-center">
             <div id="info-space" style="color:#00b4d8; font-size:1.2rem; font-weight:700;">—</div>
             <div class="small" style="color:#484f58;"><i class="fas fa-sd-card"></i> Free Space</div>
         </div>
     </div>
     <div class="col-6 col-md-3">
-        <div class="card text-center py-3">
-            <div id="info-battery" style="color:#00b4d8; font-size:1.2rem; font-weight:700;">—</div>
-            <div class="small" style="color:#484f58;"><i class="fas fa-battery-half"></i> Battery</div>
+        <div class="card text-center py-3 h-100 d-flex flex-column align-items-center justify-content-center">
+            <div id="info-card" style="color:#00b4d8; font-size:1.2rem; font-weight:700;">—</div>
+            <div class="small" style="color:#484f58;"><i class="fas fa-sd-card"></i> SD Card</div>
         </div>
     </div>
     <div class="col-6 col-md-3">
-        <div class="card text-center py-3">
+        <div class="card text-center py-3 h-100 d-flex flex-column align-items-center justify-content-center">
             <div id="info-firmware" style="color:#00b4d8; font-size:0.85rem; font-weight:700; word-break:break-all;">—</div>
             <div class="small" style="color:#484f58;"><i class="fas fa-microchip"></i> Firmware</div>
         </div>
@@ -150,9 +150,20 @@ function refreshInfo() {
 
         document.getElementById('info-space').textContent = formatSpace(info.free_space);
 
-        var bat = info.battery || {};
-        document.getElementById('info-battery').textContent =
-            (bat.rval === 0 && bat.param !== undefined) ? bat.param + '%' : '—';
+        var card = info.card_status || {};
+        var cardEl = document.getElementById('info-card');
+        if (card.rval === 0) {
+            if (card.param === 1) {
+                cardEl.textContent = 'OK';
+                cardEl.style.color = '#3fb950';
+            } else {
+                cardEl.textContent = 'Error';
+                cardEl.style.color = '#e57373';
+            }
+        } else {
+            cardEl.textContent = '—';
+            cardEl.style.color = '#00b4d8';
+        }
 
         var fw = info.firmware || {};
         document.getElementById('info-firmware').textContent =

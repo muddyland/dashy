@@ -49,34 +49,30 @@
                         </ul>
                     </li>
                     {% if cam_status == 'connected' %}
-                        <li class="nav-item">
-                            <a class="nav-link" href="/cam/live"><i class="fas fa-video"></i> Live</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="/cam/settings"><i class="fas fa-sliders-h"></i> Settings</a>
-                        </li>
                         <li class="nav-item dropdown">
-                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                <i class="fas fa-camera"></i> Locked Clips
+                            <a class="nav-link dropdown-toggle" href="#" id="camDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="fas fa-camera"></i> Cam
                             </a>
-                            <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
+                            <ul class="dropdown-menu" aria-labelledby="camDropdown">
+                                <li><a class="dropdown-item" href="/cam/live"><i class="fas fa-video"></i> Live View</a></li>
+                                <li><a class="dropdown-item" href="/cam/settings"><i class="fas fa-sliders-h"></i> Settings</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><h6 class="dropdown-header">Locked Clips</h6></li>
                                 <li><a class="dropdown-item" href="/cam/locked"><i class="fas fa-tachometer-alt"></i> Driving Mode</a></li>
                                 <li><a class="dropdown-item" href="/cam/locked?parking=True"><i class="fas fa-parking"></i> Parking Mode</a></li>
-                            </ul>
-                        </li>
-                        <li class="nav-item dropdown">
-                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown2" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                <i class="fas fa-camera"></i> All Clips
-                            </a>
-                            <ul class="dropdown-menu" aria-labelledby="navbarDropdown2">
+                                <li><hr class="dropdown-divider"></li>
+                                <li><h6 class="dropdown-header">All Clips</h6></li>
                                 <li><a class="dropdown-item" href="/cam/all"><i class="fas fa-tachometer-alt"></i> Driving Mode</a></li>
                                 <li><a class="dropdown-item" href="/cam/all?parking=True"><i class="fas fa-parking"></i> Parking Mode</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="http://{{ cam_proxy }}"><i class="fas fa-external-link-alt"></i> Camera Admin</a></li>
                             </ul>
                         </li>
+                    {% else %}
+                        <li class="nav-item">
+                            <a href="http://{{ cam_proxy }}" class="nav-link disconnected-btn" disabled><span class="disconnected"><i class="fas fa-camera"></i> DISCONNECTED</span></a>
+                        </li>
                     {% endif %}
-                    <li class="nav-item">
-                        <a href="http://{{ cam_proxy }}" class="nav-link {% if cam_status == 'disconnected' %}disconnected-btn{% else %}connected-btn{% endif %}" {% if cam_status == 'disconnected' %}disabled{% endif %}><span class="{{ cam_status }}"><i class="fas fa-camera"></i> {{ cam_status | upper }}</span></a>
-                    </li>
                 </ul>
             </div>
         </div>

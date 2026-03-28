@@ -377,14 +377,13 @@ class Camera:
 
     def get_camera_info(self):
         """
-        Fetch camera status in one call: state, free space, battery, card health, firmware.
+        Fetch camera status in one call: state, free space, card health, firmware.
         Each key contains the raw camera JSON response, or {"rval":-1, "error": str} on failure.
         """
         result = {}
         for key, cmd in [
             ("state",       _CMD_CONTROL["GET_CURRENT_STATE"]),
             ("free_space",  _CMD_CONTROL["CARD_FREE_SPACE"]),
-            ("battery",     _CMD_CONTROL["GET_BATTERY_LEVEL"]),
             ("card_status", _CMD_CONTROL["GET_CARD_STATUS"]),
             ("firmware",    _CMD_CONTROL["FIRMWARE_VERSION"]),
         ]:
@@ -533,11 +532,8 @@ class Downloads:
                         self.db.save_downloaded_files(downloaded_files)
                         downloaded_files = self.db.load_downloaded_files()
 
-                        # Remove from queue, save back to file
-                        file_urls = self.db.load_download_queue()
-                        file_urls.remove(file_url)
-                        self.db.save_download_queue(file_urls)
-                        file_urls = self.db.load_download_queue()
+                        # Remove from queue atomically
+                        self.db.remove_from_queue(file_url)
                         self.db.clear_progress(file_url)
                     except Exception as e:
                         logger.info(f"Exception: {e} Skipping file: {file_url}")
@@ -638,6 +634,10 @@ class DownloadsDB:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT 1 FROM queue WHERE url = ?", (name,)).fetchone()
         return row is not None
+
+    def remove_from_queue(self, url):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM queue WHERE url = ?", (url,))
 
     def set_progress(self, url, bytes_downloaded, total_bytes):
         with sqlite3.connect(self.db_path) as conn:
