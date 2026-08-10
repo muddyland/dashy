@@ -224,6 +224,16 @@ def downloader_loop():
             if queued:
                 logger.info(f"Queued {queued} new clip(s)")
 
+            # Clear out anything loop recording has already overwritten, before
+            # spending attempts on clips that cannot succeed.
+            if db.queue_length():
+                try:
+                    downloads.prune_missing(cam)
+                except CameraOffline:
+                    raise
+                except Exception as e:
+                    logger.warning(f"Queue prune failed: {e}")
+
             queue_len_before = db.queue_length()
             drained = True
             if queue_len_before:
@@ -240,11 +250,22 @@ def downloader_loop():
             maybe_cleanup_old_files()
 
             remaining = db.queue_length()
-            if remaining and drained is not False and cam_status.connected:
+            made_progress = remaining < queue_len_before
+            if remaining and drained is not False and cam_status.connected and made_progress:
                 # Still work to do and the camera is still there: go straight
                 # round again. Sleeping out the full scrape interval between
                 # passes is what stretched a handful of clips across an hour.
                 logger.info(f"{remaining} clip(s) still queued; continuing")
+                continue
+            if remaining and not made_progress:
+                # The queue didn't shrink, so looping immediately would spin:
+                # re-listing, re-attempting the same failures, and thrashing the
+                # camera in and out of playback mode without ever settling.
+                logger.warning(
+                    f"{remaining} clip(s) queued but none could be fetched this pass; "
+                    f"backing off for {scrape_interval}s"
+                )
+                sleep_until_disconnected(scrape_interval)
                 continue
             if remaining:
                 logger.info(f"{remaining} clip(s) queued but the camera is unavailable; will retry")
@@ -401,6 +422,48 @@ def api_queue():
         return jsonify({"queue": db.load_download_queue()})
     except:
         return jsonify({"queue": []})
+
+@app.route('/api/queue/prune', methods=['POST'])
+def api_queue_prune():
+    """Drop queued clips the camera no longer has.
+
+    Loop recording overwrites clips continuously, so a queue that has built up
+    over time contains entries that can never succeed. The downloader does this
+    automatically each cycle; this endpoint is for clearing a backlog now.
+    """
+    try:
+        removed = downloads.prune_missing(cam)
+    except CameraOffline:
+        return jsonify({"error": "Camera not connected"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+    return jsonify({"removed": removed, "remaining": DownloadsDB(config).queue_length()})
+
+
+@app.route('/api/queue/clear', methods=['POST'])
+def api_queue_clear():
+    """Empty the download queue entirely.
+
+    Only removes queue entries; downloaded clips and their history are
+    untouched, so anything still on the camera can simply be queued again.
+    """
+    db = DownloadsDB(config)
+    cleared = db.clear_queue()
+    logger.info(f"Queue cleared by request ({cleared} entries)")
+    return jsonify({"cleared": cleared})
+
+
+@app.route('/api/queue/remove', methods=['POST'])
+def api_queue_remove():
+    """Remove one clip from the queue."""
+    data = request.get_json(silent=True)
+    if not data or 'file' not in data:
+        return jsonify({"error": "Provide JSON with a 'file' key"}), 400
+    db = DownloadsDB(config)
+    db.remove_from_queue(data['file'])
+    db.clear_progress(data['file'])
+    return jsonify({"removed": data['file'], "remaining": db.queue_length()})
+
 
 @app.route('/api/progress')
 def api_progress():

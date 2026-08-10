@@ -224,6 +224,24 @@ It reports the wire format the firmware answers in (JSON or XML), which query pa
 
 For a single command, `/api/cam/raw?cmd=3014` returns the camera's unparsed reply, and adding `&value=...` performs a write. Rejected commands surface the camera's own `rval` in the UI rather than failing silently.
 
+### The queue keeps growing / clips never download
+
+Loop recording overwrites clips continuously, so anything queued but not fetched before it was overwritten can never download. Dashy removes these automatically — it reconciles the queue against the camera's file list each cycle, and drops any clip that returns 404 when attempted.
+
+To clear a backlog immediately, use the **Queue** dropdown in the navbar:
+
+- **Remove clips no longer on camera** — drops only entries the camera doesn't have
+- **Clear queue** — empties it entirely (downloaded clips and their history are kept, so anything still on the camera can be queued again)
+
+Or via the API:
+
+```bash
+curl -X POST http://<dashy>/api/queue/prune   # remove stale entries
+curl -X POST http://<dashy>/api/queue/clear   # empty the queue
+```
+
+Queuing everything from **Cam → All Clips** is the usual way a queue gets ahead of itself: unlocked clips rotate out fastest, so a large batch may be partly gone before it's fetched.
+
 ### Downloads are slow
 
 Check the band first: `dashy_diag.py` prints the WiFi association. A 2.4 GHz link caps you at a few MB/s no matter how the client is tuned, and no client-side setting beats moving the camera to 5 GHz.

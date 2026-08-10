@@ -9,6 +9,49 @@ $(document).ready(function() {
         return id.replace(/^0+/, '');
     }
 
+    // Queue maintenance. Loop recording overwrites clips, so a queue built up
+    // over time can contain entries the camera no longer has; these can never
+    // download and just sit there.
+    function queueAction(url, confirmText, done) {
+        if (confirmText && !window.confirm(confirmText)) return;
+        $.ajax({url: url, method: 'POST', contentType: 'application/json'})
+            .done(function(res) { done(res); updateQueueAndProgress(); })
+            .fail(function(xhr) {
+                var msg = (xhr.responseJSON && xhr.responseJSON.error) || 'request failed';
+                window.alert('Could not update queue: ' + msg);
+            });
+    }
+
+    function appendQueueActions() {
+        var $prune = $('<a class="dropdown-item small" href="#">')
+            .css('color', '#00b4d8')
+            .append($('<i class="fas fa-broom">'), ' Remove clips no longer on camera')
+            .on('click', function(e) {
+                e.preventDefault();
+                queueAction('/api/queue/prune', null, function(res) {
+                    window.alert('Removed ' + res.removed + ' stale entr' +
+                                 (res.removed === 1 ? 'y' : 'ies') +
+                                 '. ' + res.remaining + ' still queued.');
+                });
+            });
+
+        var $clear = $('<a class="dropdown-item small" href="#">')
+            .css('color', '#e57373')
+            .append($('<i class="fas fa-trash">'), ' Clear queue')
+            .on('click', function(e) {
+                e.preventDefault();
+                queueAction('/api/queue/clear',
+                    'Empty the download queue? Downloaded clips are kept; anything ' +
+                    'still on the camera can be queued again.',
+                    function(res) { window.alert('Cleared ' + res.cleared + ' queued clip(s).'); });
+            });
+
+        $('#queue-dropdown')
+            .append($('<li><hr class="dropdown-divider" style="border-color:#21262d;"></li>'))
+            .append($('<li>').append($prune))
+            .append($('<li>').append($clear));
+    }
+
     function updateQueueAndProgress() {
         $.when(
             $.get('/api/queue'),
@@ -55,6 +98,10 @@ $(document).ready(function() {
                 if (pendingQueue.length > 0) {
                     $('#queue-dropdown').append('<li><hr class="dropdown-divider" style="border-color:#21262d;"></li>');
                 }
+            }
+
+            if (totalCount > 0) {
+                appendQueueActions();
             }
 
             if (pendingQueue.length > 0) {

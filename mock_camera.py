@@ -115,6 +115,11 @@ def movie_parking_locked():
 def serve_file(filename):
     if not filename.endswith('.MP4'):
         return 'Not found', 404
+    # 404 for anything not in the listing, like a real camera does once loop
+    # recording has overwritten a clip. Serving every plausible name would hide
+    # the queue's handling of files that no longer exist.
+    if not any(filename in names for names in CLIPS.values()):
+        return 'Not found', 404
     return Response(
         DUMMY_MP4,
         status=200,

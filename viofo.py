@@ -276,6 +276,15 @@ class CameraOffline(Exception):
     """Raised when an operation needs the camera and it is not reachable."""
 
 
+class ClipGone(Exception):
+    """Raised when the camera no longer has a queued clip.
+
+    Distinct from a transient failure: loop recording overwrites clips
+    continuously, so a queued file disappearing is normal and must drop out of
+    the queue rather than being retried forever.
+    """
+
+
 def classify_lens(name):
     """Which camera a clip came from.
 
@@ -739,7 +748,7 @@ class Camera:
     # it once per directory the UI asks about.
     FILE_LIST_TTL = 10
 
-    def _fetch_file_list(self):
+    def fetch_file_list(self):
         """All files on the card via cmd 3015, or None if unsupported."""
         now = time.monotonic()
         with self._lock:
@@ -783,7 +792,7 @@ class Camera:
         real timestamp and size instead of inferring them from the filename,
         which is what makes unsupported models work.
         """
-        files = self._fetch_file_list()
+        files = self.fetch_file_list()
         if not files:
             return None
 
@@ -1240,6 +1249,9 @@ class Downloads:
                 mode = 'wb'
                 resume_from = 0
                 total_bytes = _to_int(response.headers.get('Content-Length'), 0)
+            elif response.status_code in (404, 410):
+                # Rotated out by loop recording, or deleted on the camera.
+                raise ClipGone(f"{file_url} is no longer on the camera")
             else:
                 raise Exception(f"Camera returned HTTP {response.status_code} for {file_url}")
 
@@ -1326,6 +1338,43 @@ class Downloads:
         else:
             yield
 
+    def prune_missing(self, cam):
+        """Drop queue entries for clips the camera no longer has.
+
+        Loop recording overwrites clips constantly, so a queue built up over
+        days accumulates entries that can never succeed. Without this they are
+        retried on every cycle forever and the queue never drains.
+
+        Only runs when the camera can enumerate its whole card in one request;
+        otherwise there is no cheap way to know what still exists, and the 404
+        handling in _drain_queue clears them as they are attempted instead.
+        """
+        queued = self.db.load_download_queue()
+        if not queued:
+            return 0
+
+        try:
+            files = cam.fetch_file_list()
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.debug(f"Could not enumerate camera files for pruning: {e}")
+            return 0
+        if not files:
+            return 0
+
+        present = {_camera_path_to_url(entry['path']) for entry in files}
+        stale = [url for url in queued if url not in present]
+        for url in stale:
+            self.db.remove_from_queue(url)
+            self.db.clear_progress(url)
+        if stale:
+            logger.info(
+                f"Removed {len(stale)} queued clip(s) no longer on the camera "
+                f"({len(queued) - len(stale)} still pending)"
+            )
+        return len(stale)
+
     def _drain_queue(self, file_urls, cam):
         """Download every queued clip. Returns the number successfully fetched.
 
@@ -1334,6 +1383,7 @@ class Downloads:
         """
         completed = 0
         self._last_drain_ok = True
+        self._removed_missing = 0
         last_heartbeat = time.monotonic()
 
         for file_url in file_urls:
@@ -1383,6 +1433,15 @@ class Downloads:
                     self.db.remove_from_queue(file_url)
                     self.db.clear_progress(file_url)
                     completed += 1
+                    break
+                except ClipGone:
+                    # Don't retry and don't keep it queued -- the clip does not
+                    # exist any more. Left in place these accumulate forever and
+                    # are re-attempted on every cycle.
+                    logger.info(f"{file_name} is gone from the camera; dropping from queue")
+                    self.db.remove_from_queue(file_url)
+                    self.db.clear_progress(file_url)
+                    self._removed_missing += 1
                     break
                 except CameraOffline:
                     logger.warning("Camera went away mid-queue; pausing downloads")
@@ -1555,6 +1614,14 @@ class DownloadsDB:
     def remove_from_queue(self, url):
         with self._db() as conn:
             conn.execute("DELETE FROM queue WHERE url = ?", (url,))
+
+    def clear_queue(self):
+        """Empty the queue. Returns how many entries were removed."""
+        with self._db() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM queue").fetchone()[0]
+            conn.execute("DELETE FROM queue")
+            conn.execute("DELETE FROM progress")
+        return count
 
     def set_progress(self, url, bytes_downloaded, total_bytes):
         with self._db() as conn:
