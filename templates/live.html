@@ -93,10 +93,25 @@ function camControl(action) {
     })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
-        if (!res.ok) alert('Error: ' + (res.data.error || 'Unknown'));
+        if (!res.ok) {
+            dashyModal.notify({
+                title: 'Camera rejected the command',
+                body: res.data.error || 'Unknown error',
+                // The camera's own reply, when it gave one -- far more useful
+                // than a generic failure message.
+                note: res.data.camera_response || null,
+                danger: true
+            });
+        }
         refreshInfo();
     })
-    .catch(function() { alert('Request failed'); })
+    .catch(function() {
+        dashyModal.notify({
+            title: 'Request failed',
+            body: 'Could not reach Dashy. Check that it is still running.',
+            danger: true
+        });
+    })
     .finally(function() { btns.forEach(function(b) { b.disabled = false; }); });
 }
 
