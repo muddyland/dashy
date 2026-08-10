@@ -80,10 +80,29 @@
 
 {% if cam_status == 'connected' %}
 <script>
+// Recording controls are refused server-side during a download -- the camera is
+// held in playback mode for the transfer. Lock them in the UI to match.
+var camLocked = false;
+
+function controlButtons() {
+    return ['btn-start', 'btn-stop', 'btn-photo']
+        .map(function(id) { return document.getElementById(id); })
+        .filter(Boolean);
+}
+
+function applyCamLock(locked) {
+    camLocked = locked;
+    controlButtons().forEach(function(b) { b.disabled = locked; });
+    var badge = document.getElementById('state-badge');
+    if (locked) {
+        badge.innerHTML = '<i class="fas fa-download"></i> Downloading — controls locked';
+        badge.style.color = '#00b4d8';
+    }
+}
+
 function camControl(action) {
-    var btns = ['btn-start', 'btn-stop', 'btn-photo'].map(function(id) {
-        return document.getElementById(id);
-    }).filter(Boolean);
+    if (camLocked) return;
+    var btns = controlButtons();
     btns.forEach(function(b) { b.disabled = true; });
 
     fetch('/api/cam/control', {
@@ -112,7 +131,7 @@ function camControl(action) {
             danger: true
         });
     })
-    .finally(function() { btns.forEach(function(b) { b.disabled = false; }); });
+    .finally(function() { btns.forEach(function(b) { b.disabled = camLocked; }); });
 }
 
 function parseState(stateObj) {
@@ -135,6 +154,14 @@ function refreshInfo() {
     .then(function(r) { return r.json(); })
     .then(function(info) {
         if (info.error) return;
+
+        // While a clip is downloading the camera isn't polled at all, so the
+        // status cards have nothing to show.
+        if (info.downloading) {
+            applyCamLock(true);
+            return;
+        }
+        applyCamLock(false);
 
         var state = parseState(info.state);
         var badge = document.getElementById('state-badge');

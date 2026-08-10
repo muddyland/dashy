@@ -22,6 +22,11 @@
 </div>
 {% endif %}
 
+<div id="downloading-banner" class="alert" style="display:none; background:#21262d; border:1px solid #00b4d8; color:#00b4d8;">
+    <i class="fas fa-download"></i> A download is in progress. Settings are locked until it finishes &mdash;
+    the camera is in playback mode and changing its WiFi settings now would interrupt the transfer.
+</div>
+
 <div id="settings-toast" class="position-fixed bottom-0 end-0 p-3" style="z-index:9999; display:none;">
     <div class="toast show" role="alert" id="toast-inner" style="background:#21262d; border:1px solid #30363d;">
         <div class="toast-body" id="toast-msg" style="color:#c9d1d9;"></div>
@@ -113,6 +118,10 @@ function renderControl(cmd, data) {
         button.type = 'button';
         button.textContent = 'Save';
         button.addEventListener('click', function() { saveSetting(cmd, input.value); });
+        // Controls are rendered after the lock state is known, so apply it here
+        // too rather than only when the state changes.
+        input.disabled = settingsLocked;
+        button.disabled = settingsLocked;
 
         group.appendChild(input);
         group.appendChild(button);
@@ -124,6 +133,7 @@ function renderControl(cmd, data) {
     var sel = document.createElement('select');
     sel.className = 'form-select form-select-sm';
     sel.style.cssText = FIELD_STYLE;
+    sel.disabled = settingsLocked;
     sel.addEventListener('change', function() { saveSetting(cmd, sel.value); });
 
     var values = options.length ? options : [curValue];
@@ -137,7 +147,34 @@ function renderControl(cmd, data) {
     container.appendChild(sel);
 }
 
+// Settings are refused server-side during a download; mirror that in the UI so
+// controls visibly lock instead of failing when clicked. Re-enables on its own
+// once the transfer finishes.
+var settingsLocked = false;
+
+function applyLock(locked) {
+    if (locked === settingsLocked) return;
+    settingsLocked = locked;
+    document.getElementById('downloading-banner').style.display = locked ? '' : 'none';
+    document.querySelectorAll('.setting-control select, .setting-control input, .setting-control button')
+        .forEach(function(el) { el.disabled = locked; });
+}
+
+function pollStatus() {
+    fetch('/api/status')
+        .then(function(r) { return r.json(); })
+        .then(function(s) { applyLock(!!s.downloading); })
+        .catch(function() { /* leave the controls as they are */ });
+}
+
+pollStatus();
+setInterval(pollStatus, 5000);
+
 function saveSetting(cmd, value) {
+    if (settingsLocked) {
+        showToast('A download is in progress — settings are locked', false);
+        return;
+    }
     fetch('/api/cam/setting/' + cmd, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},

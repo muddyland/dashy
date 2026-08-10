@@ -604,6 +604,11 @@ def mjpeg_stream():
 
 @app.route('/api/cam/info')
 def api_cam_info():
+    if downloading():
+        # This endpoint is polled every few seconds by the live view and costs
+        # four camera commands a time. Don't put that on a camera that is busy
+        # streaming a clip; report the transfer instead.
+        return jsonify({"downloading": True})
     try:
         return jsonify(cam.get_camera_info())
     except CameraOffline:
@@ -612,11 +617,50 @@ def api_cam_info():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/status')
+def api_status():
+    """Everything the UI needs to decide what to enable, in one request."""
+    return jsonify({
+        "connected": cam_status.connected,
+        "downloading": downloading(),
+    })
+
+
 _known_cmds = cam.known_commands()
 
 
 def is_known_cmd(cmd):
     return cmd in _known_cmds
+
+
+# ---------------------------------------------------------------------------
+# Camera writes are refused while a download is running.
+#
+# Three reasons, in order of severity:
+#
+#  1. Changing the WiFi name or password (cmd 3003/3004) restarts the camera's
+#     access point, which drops the link and kills the transfer mid-file.
+#  2. Downloads hold the camera in playback mode, where recording-related
+#     settings are expected to be rejected. The write appears to fail for no
+#     reason, which is exactly the "commands do nothing" confusion this
+#     project has been digging out of.
+#  3. The camera serves HTTP from a single thread while streaming the clip.
+#     Every extra request competes with the transfer.
+#
+# Reads are still allowed: one bulk settings request is cheap, and a settings
+# page that renders nothing during a download is worse than one that renders
+# read-only.
+# ---------------------------------------------------------------------------
+
+def downloading():
+    return download_event.is_set()
+
+
+def busy_downloading_response():
+    return jsonify({
+        "error": "A download is in progress. Camera settings are locked until it finishes.",
+        "downloading": True,
+    }), 409
 
 
 CAM_ACTIONS = {
@@ -633,6 +677,10 @@ def api_cam_control():
     handler = CAM_ACTIONS.get(action)
     if not handler:
         return jsonify({"error": f"Unknown action: {action}"}), 400
+    if downloading():
+        # Recording controls in particular: the camera is in playback mode for
+        # the transfer, so starting a recording here would fight the downloader.
+        return busy_downloading_response()
     try:
         result = handler()
     except CameraOffline:
@@ -685,6 +733,8 @@ def api_cam_raw():
     value = request.args.get('value')
     if value is not None and not is_known_cmd(cmd):
         return jsonify({"error": f"Refusing to write unknown command: {cmd}"}), 400
+    if value is not None and downloading():
+        return busy_downloading_response()
     try:
         result = cam.set_setting(cmd, value) if value is not None else cam.get_setting(cmd)
         return jsonify({"cmd": cmd, "sent_value": value, "result": result})
@@ -708,6 +758,8 @@ def api_cam_setting(cmd):
         # Only commands this model actually advertises. Stops the endpoint from
         # being a generic write channel into the camera's whole command space.
         return jsonify({"error": f"Unknown command: {cmd}"}), 400
+    if request.method == 'POST' and downloading():
+        return busy_downloading_response()
     try:
         if request.method == 'POST':
             data = request.get_json(silent=True)

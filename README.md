@@ -169,6 +169,22 @@ To keep the camera recording throughout, at the cost of slower and less reliable
 
 ---
 
+## Settings are locked during downloads
+
+Camera **writes** — settings changes, start/stop recording, take photo — are refused while a clip is downloading, and return `409` with a message the UI displays. The settings page and live view lock their controls and unlock again on their own once the transfer finishes.
+
+Three reasons:
+
+1. Changing the camera's WiFi name or password restarts its access point, which drops the link and kills the transfer mid-file.
+2. Downloads hold the camera in playback mode, where recording-related settings are expected to be rejected — so the write would appear to fail for no visible reason.
+3. The camera serves HTTP from a single thread while streaming the clip; every extra request competes with the transfer.
+
+**Reads stay available**, so the settings page still shows current values. The live view's status polling is suspended during a transfer (it costs four camera commands per refresh) and shows `Downloading` instead.
+
+Downloads are short, so in practice this is a brief lock rather than a real restriction.
+
+---
+
 ## Security
 
 Dashy assumes a trusted home LAN and ships with no authentication, which is fine on a segmented network and not fine otherwise. Anything that can reach the port can start and stop recording, delete clips, and read or change the dashcam's WiFi password.
