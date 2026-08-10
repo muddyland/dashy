@@ -31,12 +31,27 @@ ssl_enabled = bool(os.environ.get('SSL_ENABLED', False))
 ssl_cert_path = os.environ.get('SSL_CERT_PATH')
 # SSL Key Path
 ssl_key_path = os.environ.get('SSL_KEY_PATH')
-# Scrape Interval
+# Scrape Interval - how long to idle between listing checks once the queue is
+# empty. The downloader no longer waits this out while clips are still queued.
 scrape_interval = int(os.environ.get('SCRAPE_INTERVAL', 900))
-# Reconnect Interval
-reconnect_interval = int(os.environ.get('RECONNECT_INTERVAL', 300))
-# Download timeout
-request_timeout = int(os.environ.get('REQUEST_TIMEOUT', 900))
+# Reconnect Interval - how long to wait before re-checking a camera that isn't
+# there. Short by design: this is the delay between pulling into the driveway
+# and the download starting.
+reconnect_interval = int(os.environ.get('RECONNECT_INTERVAL', 15))
+# Read timeout for a transfer in flight -- how long to wait for the next block
+# of data before treating the link as dead, NOT a deadline for the whole file.
+download_read_timeout = int(os.environ.get('DOWNLOAD_READ_TIMEOUT', 45))
+# Bytes per read while downloading. Anything above ~64 KiB saturates the link;
+# the ceiling matters more for resume granularity, since a dropped connection
+# loses at most one chunk.
+download_chunk_size = int(os.environ.get('DOWNLOAD_CHUNK_SIZE', 256 * 1024))
+# Attempts per clip before giving up on it for this cycle.
+download_attempts = int(os.environ.get('DOWNLOAD_ATTEMPTS', 3))
+# Switch the camera to playback mode while downloading. Much faster and far
+# more stable, because the camera is not encoding 4K and writing to the SD card
+# at the same time -- but it does stop recording for the duration. Recording is
+# always restored afterwards. Set false to keep the camera recording throughout.
+playback_mode_for_downloads = os.environ.get('PLAYBACK_MODE_FOR_DOWNLOADS', 'true').lower() != 'false'
 # Retention - set RETENTION_ENABLED=false to keep all clips forever
 retention_enabled = os.environ.get('RETENTION_ENABLED', 'true').lower() != 'false'
 # Retention days - clips older than this will be deleted (default: 180 = 6 months)
@@ -83,6 +98,7 @@ if __name__ == "__main__":
             "cam_ip": cam_ip,
             "cam_wifi_ip": cam_wifi_ip,
             "cam_model": cam_model,
+            "cam_port": int(cam_port),
             "cam_proxy_port" : cam_proxy_port,
             "video_path": data_dir,
             "download_parking": download_parking,
@@ -92,7 +108,10 @@ if __name__ == "__main__":
             "ssl_enabled": ssl_enabled,
             "thumbnails_dir": thumbnails_dir,
             "locked_dir": locked_dir,
-            "request_timeout": request_timeout,
+            "download_read_timeout": download_read_timeout,
+            "download_chunk_size": download_chunk_size,
+            "download_attempts": download_attempts,
+            "playback_mode_for_downloads": playback_mode_for_downloads,
             "retention_enabled": retention_enabled,
             "retention_days": retention_days,
             "ha_webhook_url": ha_webhook_url

@@ -23,12 +23,17 @@ app = Flask(__name__)
 
 def make_filename(dt, index, location, parking=False):
     """Generate a realistic A229-Plus filename.
-    Format: YYYY_MMDD_HHMMSS_<index><L>[P].MP4
+
+    Format: YYYY_MMDD_HHMMSS_<index>[P]<L>.MP4
+
+    The lens letter is last, immediately before the extension, and the parking
+    marker precedes it -- parking clips end PF.MP4 / PR.MP4. This matters
+    because lens detection keys off the character before the dot.
     """
     loc_char = 'F' if location == 'Front' else 'R'
     park_char = 'P' if parking else ''
     seq = str(index).zfill(6)
-    return f"{dt.strftime('%Y_%m%d_%H%M%S')}_{seq}{loc_char}{park_char}.MP4"
+    return f"{dt.strftime('%Y_%m%d_%H%M%S')}_{seq}{park_char}{loc_char}.MP4"
 
 
 def generate_clips(count, base_dt, parking=False):
@@ -173,33 +178,124 @@ MOCK_SETTINGS = {
 }
 
 
+# Wire format. Real Viofo firmware answers in XML; the JSON mode is kept
+# because some models/firmware do reply in JSON and Dashy has to cope with
+# both.
+#   --xml  (default) mimic real hardware
+#   --json legacy behaviour
+XML_MODE = True
+
+# Real cameras take &par= for numbers and &str= for text. --lenient accepts
+# param_0 as well, to exercise Dashy's fallback path.
+ACCEPT_PARAM_0 = False
+
+_mock_mode = 1  # 1 = video/record, 2 = playback
+
+# Set false to emulate firmware without the cmd 3015 file list, so the
+# HTML directory-scraping fallback gets exercised.
+SUPPORT_FILE_LIST = True
+
+
+def _xml(**fields):
+    body = "".join(f"<{k}>{v}</{k}>" for k, v in fields.items())
+    return Response(f'<?xml version="1.0" encoding="UTF-8" ?>\n<Function>{body}</Function>',
+                    mimetype='text/xml')
+
+
+def _reply(cmd, status=0, **extra):
+    if XML_MODE:
+        return _xml(Cmd=cmd, Status=status, **extra)
+    payload = {"rval": status, "type": cmd}
+    payload.update({k.lower(): v for k, v in extra.items()})
+    return jsonify(payload)
+
+
 @app.route('/')
 def index_or_api():
-    global _mock_recording
-    if request.args.get('custom') == '1':
-        cmd = request.args.get('cmd', type=int)
-        param_0 = request.args.get('param_0')
-        if cmd is None:
-            return jsonify({"rval": -1}), 400
+    global _mock_recording, _mock_mode
+    if request.args.get('custom') != '1':
+        return _index()
 
-        if param_0 is not None:
-            # SET / ACTION
-            if cmd == 2001:  # MOVIE_RECORD: param_0=1 start, param_0=0 stop
-                _mock_recording = (param_0 == '1')
-            elif cmd in MOCK_SETTINGS:
-                MOCK_SETTINGS[cmd]['cur_value'] = param_0.replace('+', ' ')
-            return jsonify({"rval": 0, "type": cmd})
-        else:
-            # GET — check status commands first, then settings
-            if cmd in MOCK_STATUS:
-                return jsonify(MOCK_STATUS[cmd]())
-            setting = MOCK_SETTINGS.get(cmd)
-            if setting:
-                return jsonify({"rval": 0, "type": cmd, "param": 0,
-                                "cur_value": setting['cur_value'],
-                                "options": setting['options']})
-            return jsonify({"rval": -13, "type": cmd})
-    return _index()
+    cmd = request.args.get('cmd', type=int)
+    if cmd is None:
+        return _reply(0, -1), 400
+
+    # Value may arrive as par (numeric), str (text), or param_0 (legacy).
+    par = request.args.get('par')
+    text = request.args.get('str')
+    param_0 = request.args.get('param_0')
+    if param_0 is not None and not ACCEPT_PARAM_0:
+        # This is what real firmware does: accepts the request, reports an
+        # error status, and silently doesn't apply the change.
+        return _reply(cmd, -14)
+
+    value = par if par is not None else (text if text is not None else param_0)
+
+    if value is not None:
+        # SET / ACTION
+        if cmd == 3001:                       # CHANGE_MODE
+            _mock_mode = int(value)
+            return _reply(cmd, 0)
+        if cmd == 2001:                       # MOVIE_RECORD
+            _mock_recording = (value == '1')
+            return _reply(cmd, 0)
+        if cmd in MOCK_SETTINGS:
+            MOCK_SETTINGS[cmd]['cur_value'] = value.replace('+', ' ')
+            return _reply(cmd, 0)
+        return _reply(cmd, -13)
+
+    # GET
+    if cmd == 3016:                           # HEART_BEAT
+        return _reply(cmd, 0)
+    if cmd == 3015:                           # GET_FILE_LIST
+        if not SUPPORT_FILE_LIST:
+            return _reply(cmd, -13)
+        blocks = []
+        for path, names in CLIPS.items():
+            for i, fname in enumerate(names):
+                dt = datetime.now() - timedelta(minutes=i * 3)
+                # Real cameras report a DOS-style path with a drive letter.
+                fpath = ("A:" + path.replace('/', '\\') + '\\' + fname)
+                blocks.append(
+                    "<File>"
+                    f"<NAME>{fname}</NAME>"
+                    f"<FPATH>{fpath}</FPATH>"
+                    f"<SIZE>{123456789}</SIZE>"
+                    f"<TIMECODE>{int(dt.timestamp())}</TIMECODE>"
+                    f"<TIME>{dt.strftime('%Y/%m/%d %H:%M:%S')}</TIME>"
+                    f"<ATTR>{33 if '/RO' in path else 32}</ATTR>"
+                    "</File>"
+                )
+        return Response(
+            '<?xml version="1.0" encoding="UTF-8" ?>\n<LIST>' + "".join(blocks) + '</LIST>',
+            mimetype='text/xml')
+    if cmd == 3014:                           # bulk settings table
+        if XML_MODE:
+            blocks = "".join(
+                f"<Function><Cmd>{c}</Cmd><Status>{i}</Status></Function>"
+                for i, c in enumerate(sorted(MOCK_SETTINGS))
+            )
+            return Response(f'<?xml version="1.0" encoding="UTF-8" ?>\n{blocks}',
+                            mimetype='text/xml')
+        return jsonify(MOCK_STATUS[3014]())
+    if cmd in MOCK_STATUS:
+        if XML_MODE:
+            data = MOCK_STATUS[cmd]()
+            extra = {}
+            if 'cur_value' in data:
+                extra['String'] = data['cur_value']
+            elif 'param' in data:
+                extra['Value'] = data['param']
+            return _reply(cmd, data.get('param', 0) if 'param' in data else 0, **extra)
+        return jsonify(MOCK_STATUS[cmd]())
+    setting = MOCK_SETTINGS.get(cmd)
+    if setting:
+        if XML_MODE:
+            return _reply(cmd, 0, String=setting['cur_value'])
+        return jsonify({"rval": 0, "type": cmd, "param": 0,
+                        "cur_value": setting['cur_value'],
+                        "options": setting['options']})
+    return _reply(cmd, -13)
 
 
 def _index():
@@ -231,7 +327,25 @@ if __name__ == '__main__':
                         help='Port to listen on (default: 80, requires sudo)')
     parser.add_argument('--host', default='0.0.0.0',
                         help='Host to bind to (default: 0.0.0.0)')
+    parser.add_argument('--json', action='store_true',
+                        help='Reply in JSON instead of XML. Real firmware uses XML; '
+                             'use this to exercise the JSON path.')
+    parser.add_argument('--no-file-list', action='store_true',
+                        help='Pretend cmd 3015 is unsupported, to exercise the '
+                             'HTML directory-listing fallback.')
+    parser.add_argument('--lenient', action='store_true',
+                        help='Also accept the legacy &param_0= form. Real cameras '
+                             'reject it, which is what this mock does by default.')
     args = parser.parse_args()
+
+    XML_MODE = not args.json
+    ACCEPT_PARAM_0 = args.lenient
+    globals()['XML_MODE'] = XML_MODE
+    globals()['ACCEPT_PARAM_0'] = ACCEPT_PARAM_0
+    globals()['SUPPORT_FILE_LIST'] = not args.no_file_list
+    print(f"Supports cmd 3015 file list: {not args.no_file_list}")
+    print(f"Wire format: {'XML (like real hardware)' if XML_MODE else 'JSON'}")
+    print(f"Accepts &param_0=: {ACCEPT_PARAM_0}")
 
     print(f"Starting mock camera on {args.host}:{args.port}")
     print(f"Set CAM_IP=127.0.0.1 in your Dashy config to use this mock.")

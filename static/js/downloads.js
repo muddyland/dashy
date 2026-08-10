@@ -36,18 +36,21 @@ $(document).ready(function() {
                     : formatMB(progress.bytes_downloaded) + ' downloaded';
                 var dateLabel = getVideoId(progress.filename);
 
-                $('#queue-dropdown').append(
-                    '<li>' +
-                    '<div class="px-3 py-2" style="max-width:280px;">' +
-                    '<small style="color:#00b4d8;"><span class="queue-pulse">&#9679;</span> Downloading</small><br>' +
-                    '<small class="d-block" style="color:#eceff4;">' + dateLabel + '</small>' +
-                    '<div class="progress mt-1" style="height: 4px; background:#21262d;">' +
-                    '<div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:' + barWidth + '; background:#00b4d8;"></div>' +
-                    '</div>' +
-                    '<small style="color:#484f58;">' + sizeLabel + '</small>' +
-                    '</div>' +
-                    '</li>'
+                // Filenames come from the camera, so labels are set as text
+                // rather than concatenated into an HTML string.
+                var $item = $('<li>').append(
+                    $('<div class="px-3 py-2">').css('max-width', '280px').append(
+                        $('<small>').css('color', '#00b4d8').append(
+                            $('<span class="queue-pulse">').html('&#9679;'), ' Downloading'),
+                        $('<br>'),
+                        $('<small class="d-block">').css('color', '#eceff4').text(dateLabel),
+                        $('<div class="progress mt-1">').css({height: '4px', background: '#21262d'}).append(
+                            $('<div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar">')
+                                .css({width: barWidth, background: '#00b4d8'})),
+                        $('<small>').css('color', '#484f58').html(sizeLabel)
+                    )
                 );
+                $('#queue-dropdown').append($item);
 
                 if (pendingQueue.length > 0) {
                     $('#queue-dropdown').append('<li><hr class="dropdown-divider" style="border-color:#21262d;"></li>');
@@ -58,7 +61,14 @@ $(document).ready(function() {
                 pendingQueue.forEach(function(item) {
                     var fname = item.split('/').pop();
                     var dateLabel = getVideoId(fname);
-                    $('#queue-dropdown').append('<li><a class="dropdown-item" style="max-width:280px; color:#c9d1d9;" href="#"><i class="fas fa-hourglass-half" style="color:#484f58;"></i> ' + dateLabel + '</a></li>');
+                    $('#queue-dropdown').append(
+                        $('<li>').append(
+                            $('<a class="dropdown-item" href="#">')
+                                .css({'max-width': '280px', color: '#c9d1d9'})
+                                .append($('<i class="fas fa-hourglass-half">').css('color', '#484f58'), ' ')
+                                .append(document.createTextNode(dateLabel))
+                        )
+                    );
                 });
             } else if (!progress.active) {
                 $('#queue-dropdown').append('<li><a class="dropdown-item" style="color:#484f58;" href="#"><i class="fas fa-check-circle" style="color:#00b4d8;"></i> Queue empty</a></li>');

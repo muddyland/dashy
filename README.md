@@ -56,9 +56,15 @@ docker run -d \
 | `THUMBNAILS_DIR` | `$DATA_DIR/thumbnails` | Directory for generated thumbnails |
 | `DOWNLOAD_LOCKED` | `true` | Download driving mode locked clips |
 | `DOWNLOAD_PARKING` | `true` | Download parking mode locked clips |
-| `SCRAPE_INTERVAL` | `900` | How often (seconds) to check for new clips |
-| `RECONNECT_INTERVAL` | `300` | How often (seconds) to retry camera connection |
-| `REQUEST_TIMEOUT` | `900` | Download request timeout in seconds |
+| `SCRAPE_INTERVAL` | `900` | How long to idle between listing checks **once the queue is empty**. Clips still queued are downloaded back-to-back without waiting this out |
+| `RECONNECT_INTERVAL` | `15` | How long to wait before retrying after a camera error |
+| `DOWNLOAD_READ_TIMEOUT` | `45` | Seconds to wait for the next block of data before treating the link as dead. Not a deadline for the whole file |
+| `DOWNLOAD_CHUNK_SIZE` | `262144` | Bytes per read. Above ~64 KiB throughput is flat; the size mainly bounds how much is re-fetched after a dropped connection |
+| `DOWNLOAD_ATTEMPTS` | `3` | Attempts per clip before moving on. Interrupted clips resume, they don't restart |
+| `PLAYBACK_MODE_FOR_DOWNLOADS` | `true` | Put the camera in playback mode while downloading — much faster, but it stops recording for the duration. See [Playback mode](#playback-mode-while-downloading) |
+| `DASHY_THREADS` | `8` | Worker threads. Must stay above 1 or an open live view blocks the whole UI |
+| `DASHY_USERNAME` | _(unset)_ | Enable HTTP basic auth (with `DASHY_PASSWORD`). See [Security](#security) |
+| `DASHY_PASSWORD` | _(unset)_ | Password for basic auth. Auth is off unless both are set |
 | `RETENTION_ENABLED` | `true` | Auto-delete old clips |
 | `RETENTION_DAYS` | `180` | Delete clips older than this many days (6 months default) |
 | `HA_WEBHOOK_URL` | _(unset)_ | Home Assistant webhook URL — fired after each download cycle |
@@ -110,19 +116,25 @@ Tested on Debian Buster and Bookworm. Requires a wired LAN connection — the Pi
    cp config_template.json config.json
    nano config.json
    ```
-   Key fields:
-   ```json
-   {
-       "cam_ip": "192.168.1.254",
-       "cam_wifi_ip": "10.x.x.x",
-       "cam_model": "A229-Plus",
-       "video_path": "videos",
-       "download_parking": true,
-       "download_locked": true,
-       "retention_enabled": true,
-       "retention_days": 180
-   }
-   ```
+
+   | Field | Default | Description |
+   |---|---|---|
+   | `cam_ip` | `192.168.1.254` | Camera IP in AP mode |
+   | `cam_wifi_ip` | _(empty)_ | Camera IP on your home WiFi (A229-Plus). Tried **first** when set; leave empty if unused |
+   | `cam_port` | `80` | Camera HTTP port |
+   | `cam_model` | `A229-Plus` | `A229-Plus` or `A129-Plus` — decides filename parsing and command IDs |
+   | `video_path` | `videos` | Root for clips and thumbnails |
+   | `download_locked` / `download_parking` | `true` | Which locked clips to fetch |
+   | `scrape_interval` | `900` | Idle seconds between listing checks **when the queue is empty** |
+   | `reconnect_interval` | `15` | Seconds to wait before retrying after a camera error |
+   | `download_read_timeout` | `45` | Seconds to wait for the next block before treating the link as dead |
+   | `download_chunk_size` | `262144` | Bytes per read |
+   | `download_attempts` | `3` | Attempts per clip before moving on |
+   | `playback_mode_for_downloads` | `true` | Switch to playback mode while downloading — see [Playback mode](#playback-mode-while-downloading) |
+   | `retention_enabled` / `retention_days` | `true` / `180` | Auto-delete old clips |
+   | `auth_username` / `auth_password` | _(empty)_ | Enable HTTP basic auth — see [Security](#security) |
+
+   Leave `cam_wifi_ip` empty rather than a placeholder if your camera doesn't join your home WiFi.
 
 7. **Enable the systemd service**
    ```bash
@@ -138,6 +150,83 @@ Tested on Debian Buster and Bookworm. Requires a wired LAN connection — the Pi
    |---|---|
    | Dashy web UI | `http://<your-dashy-ip>/` |
    | Camera proxy | `http://<your-dashy-ip>:8080/` |
+
+---
+
+## Playback mode while downloading
+
+Dashy switches the camera into playback mode (`cmd 3001 par=2`) before listing or downloading, then back to video mode when it's done. Otherwise the camera is encoding 4K, writing to the SD card, and serving the transfer over WiFi all at once — which is the main reason downloads crawl and connections drop mid-file.
+
+**This stops recording for the duration of the download.** Dashy restores recording mode afterwards in all cases: on success, on error, and when the camera disappears mid-queue. It also restores it at startup, in case a previous run was killed mid-download. Even so, it is a real behaviour change worth knowing about.
+
+To keep the camera recording throughout, at the cost of slower and less reliable downloads:
+
+```bash
+-e PLAYBACK_MODE_FOR_DOWNLOADS=false
+```
+
+`dashy_diag.py` measures the difference on your specific camera and tells you whether it's worth it.
+
+---
+
+## Security
+
+Dashy assumes a trusted home LAN and ships with no authentication, which is fine on a segmented network and not fine otherwise. Anything that can reach the port can start and stop recording, delete clips, and read or change the dashcam's WiFi password.
+
+To require credentials, set both:
+
+```bash
+-e DASHY_USERNAME=admin -e DASHY_PASSWORD='something-long'
+```
+
+HTTP basic auth then covers the whole UI and API. The Home Assistant endpoints (`/api/hass*`) and `/manifest.json` stay open so existing automations keep working. Basic auth sends credentials reversibly encoded, so pair it with `SSL_ENABLED=true` if the traffic crosses anything you don't control.
+
+Two things auth does **not** cover:
+
+- **The camera proxy on port 8080.** Nginx proxies the dashcam's own web UI there with no credentials in front of it. Don't publish that port beyond your LAN.
+- **The clip and thumbnail directories**, served directly by Nginx with `autoindex on`.
+
+Dashy is not intended to be exposed to the internet.
+
+---
+
+## Troubleshooting
+
+### Protocol notes
+
+How Dashy talks to the camera:
+
+| | |
+|---|---|
+| Base URL | `http://192.168.1.254/?custom=1&cmd=<N>` |
+| Response format | **XML** (`<Function><Cmd>…</Cmd><Status>…</Status></Function>`). Some models answer JSON; Dashy handles both |
+| Set a number | `&par=<n>` |
+| Set text | `&str=<text>` (WiFi name/password, stamps) |
+| `<Status>` | Result code on a write, **current value** on a read |
+| All settings | `cmd=3014` returns the whole table in one request |
+| File list | `cmd=3015` returns name, path, size and timestamp for the whole card |
+| Playback / video mode | `cmd=3001` with `par=2` / `par=1` |
+| Heartbeat | `cmd=3016` |
+| MJPEG stream | port `8192` |
+| Notification socket | port `3333` (not used by Dashy) |
+
+Clip metadata comes from the camera's file list when supported, so timestamps and sizes are read rather than inferred from filenames — which is what makes unlisted models work. Where filenames are used, the character before the extension gives the lens (`F` front, `R` rear, `I` interior, `T` tele), and parking vs driving comes from the directory rather than the filename.
+
+### Camera commands do nothing
+
+Use the diagnostic tool — it talks to your camera and reports what it actually does, rather than what the code assumes:
+
+```bash
+python3 dashy_diag.py
+```
+
+It reports the wire format the firmware answers in (JSON or XML), which query parameter it accepts for writes (`par` vs `param_0`), whether it supports resuming interrupted downloads, how much keep-alive helps, and how many simultaneous connections it tolerates before failing.
+
+For a single command, `/api/cam/raw?cmd=3014` returns the camera's unparsed reply, and adding `&value=...` performs a write. Rejected commands surface the camera's own `rval` in the UI rather than failing silently.
+
+### Downloads are slow
+
+Check the band first: `dashy_diag.py` prints the WiFi association. A 2.4 GHz link caps you at a few MB/s no matter how the client is tuned, and no client-side setting beats moving the camera to 5 GHz.
 
 ---
 

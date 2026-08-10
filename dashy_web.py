@@ -1,10 +1,14 @@
+import hmac
 import os
 import threading
 import time
 import requests as http_requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, Response, jsonify
-from viofo import Camera, Downloads, DownloadsDB, CameraStatus
+from viofo import (
+    Camera, Downloads, DownloadsDB, CameraStatus, CameraOffline,
+    is_safe_clip_name, is_safe_clip_url,
+)
 from dashy_config import Config
 import logging
 
@@ -23,7 +27,51 @@ app = Flask(__name__, static_url_path='/static', static_folder='./static')
 cam = Camera(config)
 cam_status = CameraStatus()
 download_event = threading.Event()
+# Set as soon as the camera is reachable. The downloader waits on this rather
+# than polling a flag on a timer, so the gap between the camera appearing and
+# the first byte being fetched is the probe interval, not reconnect_interval.
+camera_online = threading.Event()
 downloads = Downloads(config)
+
+# ---------------------------------------------------------------------------
+# Optional access control
+#
+# Off by default, because Dashy is normally on a trusted home LAN. Worth turning
+# on: there is no other protection on the camera control surface, and it can
+# read and change the dashcam's WiFi password (cmd 3004), start and stop
+# recording, and delete clips. Anything that can reach the port can do all of
+# that.
+# ---------------------------------------------------------------------------
+
+AUTH_USER = os.environ.get('DASHY_USERNAME') or config_json.get('auth_username')
+AUTH_PASSWORD = os.environ.get('DASHY_PASSWORD') or config_json.get('auth_password')
+
+# Left reachable without credentials so Home Assistant polling and the PWA
+# manifest keep working when auth is enabled.
+AUTH_EXEMPT_PATHS = {'/api/hass', '/api/hass/locked', '/api/hass/downloading', '/manifest.json'}
+
+
+@app.before_request
+def require_auth():
+    if not (AUTH_USER and AUTH_PASSWORD):
+        return None
+    if request.path in AUTH_EXEMPT_PATHS or request.path.startswith('/static/'):
+        return None
+    auth = request.authorization
+    # compare_digest on both fields: a plain == leaks length and prefix through
+    # timing.
+    if auth and hmac.compare_digest(auth.username or '', AUTH_USER) \
+            and hmac.compare_digest(auth.password or '', AUTH_PASSWORD):
+        return None
+    return Response('Authentication required', 401,
+                    {'WWW-Authenticate': 'Basic realm="Dashy"'})
+
+
+if AUTH_USER and AUTH_PASSWORD:
+    logger.info("HTTP basic auth is enabled")
+else:
+    logger.info("HTTP basic auth is disabled (set DASHY_USERNAME and DASHY_PASSWORD to enable)")
+
 
 def get_max(a, b):
     return max(a, b)
@@ -35,27 +83,74 @@ def get_min(a, b):
 def custom_filters():
     return dict(get_max=get_max, get_min=get_min)
 
-requests_timeout = int(config_json.get("requests_timeout", 900))
+# How often the status thread probes the camera. Slow while connected (the
+# downloader is already exercising the link), fast while disconnected so a
+# camera coming up in the driveway is picked up almost immediately instead of
+# after the old 30s + 300s worst case.
+CONNECTED_POLL_SECONDS = int(config_json.get("connected_poll_seconds", 30))
+DISCONNECTED_POLL_SECONDS = int(config_json.get("disconnected_poll_seconds", 5))
 
 # ---------------------------------------------------------------------------
 # Background threads
 # ---------------------------------------------------------------------------
 
 def camera_check_loop():
-    """Checks camera connection every 30s and updates shared CameraStatus."""
+    """Keep the shared CameraStatus in step with the camera.
+
+    Polls quickly while disconnected so pulling into the driveway is noticed
+    within seconds, and slowly once connected so we are not opening sockets at
+    a camera that is busy serving a download.
+
+    Every iteration is wrapped: an escaping exception used to kill this thread
+    outright, after which the UI reported "disconnected" forever and every
+    camera command returned 503 even with the camera sitting right there.
+    """
     while True:
-        time.sleep(30)
-        cam.check_camera_connection()
-        cam_status.update(cam)
-        logger.info(f"Camera status: {cam_status.connected_string}")
+        if download_event.is_set():
+            # A transfer in flight is proof the link is up. Don't add a probe
+            # socket on top of it -- the downloader reports failures itself,
+            # and this loop resumes probing the moment it finishes.
+            time.sleep(CONNECTED_POLL_SECONDS)
+            continue
+        try:
+            cam.check_camera_connection(force=True)
+            cam_status.update(cam)
+            if cam_status.connected:
+                camera_online.set()
+            else:
+                camera_online.clear()
+        except Exception as e:
+            logger.error(f"Camera check failed: {e}")
+        time.sleep(CONNECTED_POLL_SECONDS if cam_status.connected else DISCONNECTED_POLL_SECONDS)
 
 
 def find_missing_thumbnails():
-    local_files = os.listdir(downloads.download_path)
-    for f in local_files:
-        file_name = f.split("/")[-1].replace(".MP4", "")
-        if not os.path.isfile(f"{downloads.thumbnail_path}/{file_name}.jpg"):
-            downloads.generate_preview(f"{downloads.download_path}/{file_name}.MP4", file_name)
+    for f in os.listdir(downloads.download_path):
+        # Only finished clips. Partial downloads (.part) are still being written
+        # and would just make ffmpeg fail on every pass.
+        if not is_safe_clip_name(f):
+            continue
+        base_name = f[:-4]
+        if not os.path.isfile(os.path.join(downloads.thumbnail_path, base_name + ".jpg")):
+            downloads.generate_preview(os.path.join(downloads.download_path, f), base_name)
+
+
+_last_cleanup = 0.0
+CLEANUP_INTERVAL = 3600
+
+
+def maybe_cleanup_old_files():
+    """Run retention at most hourly.
+
+    The downloader loop now cycles as fast as the queue allows, and stat-ing
+    every clip on disk each cycle is wasted work when retention is measured in
+    days.
+    """
+    global _last_cleanup
+    if time.monotonic() - _last_cleanup < CLEANUP_INTERVAL:
+        return
+    _last_cleanup = time.monotonic()
+    cleanup_old_files()
 
 
 def cleanup_old_files():
@@ -83,62 +178,110 @@ def cleanup_old_files():
     logger.info(f"Cleanup complete. {deleted} clip(s) deleted older than {retention_days} days.")
 
 
+def queue_locked_clips(db):
+    """Add any not-yet-downloaded locked clips to the queue. Returns count added."""
+    added = 0
+    wanted = []
+    if config_json.get('download_locked', False):
+        wanted.append(("driving", "Locked Driving Mode"))
+    if config_json.get('download_parking', False):
+        wanted.append(("parking", "Locked Parking Mode"))
+
+    for mode, label in wanted:
+        try:
+            logger.info(f"Checking for {label} clips...")
+            files = cam.scrape_webserver(mode=mode, locked=True, db=db)
+            for file in files:
+                if not file['downloaded'] and not file['in_queue']:
+                    db.append_download_queue(f"{file['dir']}/{file['filename']}")
+                    added += 1
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.error(f"Error queuing {label.lower()} clips: {e}")
+    return added
+
+
 def downloader_loop():
-    """Background thread: queues and downloads locked clips whenever the camera is connected."""
+    """Background thread: queues and downloads locked clips whenever the camera is connected.
+
+    The whole body is exception-guarded. Nothing in here may be allowed to kill
+    the thread, because a dead downloader thread looks exactly like a camera
+    that never connects.
+    """
+    scrape_interval = int(config_json.get('scrape_interval', 900))
+    retry_delay = min(int(config_json.get('reconnect_interval', 15)), 30)
+    db = DownloadsDB(config)
+
     while True:
-        if cam_status.connected:
-            try:
-                db = DownloadsDB(config)
+        try:
+            if not camera_online.wait(timeout=60):
+                # Camera still absent; nothing to do but keep waiting. The wait
+                # returns the moment the status thread sees it come back.
+                continue
 
-                if config_json.get('download_locked', False):
-                    try:
-                        logger.info("Checking for Locked Driving Mode clips...")
-                        files = cam.scrape_webserver(mode="driving", locked=True)
-                        for file in files:
-                            db.append_download_queue(f"{file['dir']}/{file['filename']}")
-                    except Exception as e:
-                        logger.error(f"Error queuing driving clips: {e}")
+            queued = queue_locked_clips(db)
+            if queued:
+                logger.info(f"Queued {queued} new clip(s)")
 
-                if config_json.get('download_parking', False):
-                    try:
-                        logger.info("Checking for Locked Parking Mode clips...")
-                        files = cam.scrape_webserver(mode="parking", locked=True)
-                        for file in files:
-                            db.append_download_queue(f"{file['dir']}/{file['filename']}")
-                    except Exception as e:
-                        logger.error(f"Error queuing parking clips: {e}")
-
-                queue_len_before = db.queue_length()
+            queue_len_before = db.queue_length()
+            drained = True
+            if queue_len_before:
                 download_event.set()
                 try:
-                    downloads.download_video(cam=cam)
+                    drained = downloads.download_video(cam=cam)
                 finally:
                     download_event.clear()
 
-                ha_webhook = config_json.get('ha_webhook_url')
-                if ha_webhook and queue_len_before > 0:
-                    try:
-                        http_requests.post(ha_webhook, json={"downloads": queue_len_before}, timeout=10)
-                        logger.info(f"Fired HA webhook: {ha_webhook}")
-                    except Exception as e:
-                        logger.warning(f"Failed to fire HA webhook: {e}")
+            if queue_len_before:
+                fire_ha_webhook(queue_len_before)
 
-                time.sleep(10)
-                find_missing_thumbnails()
-                cleanup_old_files()
+            find_missing_thumbnails()
+            maybe_cleanup_old_files()
 
-                scrape_interval = config_json.get('scrape_interval', 900)
-                logger.info(f"Sleeping for {scrape_interval}s...")
-                time.sleep(scrape_interval)
+            remaining = db.queue_length()
+            if remaining and drained is not False and cam_status.connected:
+                # Still work to do and the camera is still there: go straight
+                # round again. Sleeping out the full scrape interval between
+                # passes is what stretched a handful of clips across an hour.
+                logger.info(f"{remaining} clip(s) still queued; continuing")
+                continue
+            if remaining:
+                logger.info(f"{remaining} clip(s) queued but the camera is unavailable; will retry")
+                time.sleep(retry_delay)
+                continue
 
-            except Exception as e:
-                scrape_interval = config_json.get('scrape_interval', 900)
-                logger.error(f"Downloader loop error: {e}. Retrying in {scrape_interval}s.")
-                time.sleep(scrape_interval)
-        else:
-            reconnect_interval = config_json.get('reconnect_interval', 300)
-            logger.info(f"Camera not connected, checking again in {reconnect_interval}s...")
-            time.sleep(reconnect_interval)
+            logger.info(f"Queue empty. Next check in {scrape_interval}s.")
+            # Wake early if the camera disappears, so we return to the fast
+            # idle poll instead of holding a stale connected state.
+            sleep_until_disconnected(scrape_interval)
+
+        except CameraOffline:
+            logger.info("Camera not connected; waiting for it to come back.")
+            time.sleep(retry_delay)
+        except Exception as e:
+            logger.exception(f"Downloader loop error: {e}. Retrying in {retry_delay}s.")
+            time.sleep(retry_delay)
+
+
+def sleep_until_disconnected(seconds):
+    """Sleep up to `seconds`, returning early if the camera drops."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not cam_status.connected:
+            return
+        time.sleep(min(5, max(0.1, deadline - time.monotonic())))
+
+
+def fire_ha_webhook(count):
+    ha_webhook = config_json.get('ha_webhook_url')
+    if not ha_webhook:
+        return
+    try:
+        http_requests.post(ha_webhook, json={"downloads": count}, timeout=10)
+        logger.info("Fired HA webhook")
+    except Exception as e:
+        logger.warning(f"Failed to fire HA webhook: {e}")
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -153,21 +296,33 @@ def upload_file():
     db = DownloadsDB(config)
     file_url = request.args.get('file', None, type=str)
     if not file_url:
-        return "No file URL"
+        return "No file URL", 400
+    # Anything queued here is later appended to the camera base URL and its last
+    # path segment used as a local filename, so only real clip paths are
+    # accepted.
+    if not is_safe_clip_url(file_url):
+        logger.warning(f"Rejected queue request for {file_url!r}")
+        return "Not a valid camera clip path", 400
     db.append_download_queue(file_url)
     return f"Appended {file_url} to the downloads queue"
 
 @app.route('/storage/grab_all', methods=['POST'])
 def grab_all():
     db = DownloadsDB(config)
-    data = request.get_json()
-    if not data or 'files' not in data:
+    data = request.get_json(silent=True)
+    if not data or 'files' not in data or not isinstance(data['files'], list):
         return jsonify({"error": "No files provided"}), 400
     queued = 0
+    rejected = 0
     for file_url in data['files']:
+        if not is_safe_clip_url(file_url):
+            rejected += 1
+            continue
         db.append_download_queue(file_url)
         queued += 1
-    return jsonify({"queued": queued})
+    if rejected:
+        logger.warning(f"Rejected {rejected} invalid queue entries")
+    return jsonify({"queued": queued, "rejected": rejected})
 
 def get_video_files():
     video_files = []
@@ -267,21 +422,34 @@ def api_progress():
 
 @app.route('/api/storage/delete', methods=['DELETE'])
 def delete_file():
-    data = request.get_json()
-    logger.info(data)
+    data = request.get_json(silent=True)
     if not data or 'filename' not in data:
         return jsonify({"error": "Invalid request. Please provide JSON data with 'filename' key."}), 400
+
     filename = data['filename']
-    file_path = os.path.join(downloads.download_path, filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
-        thumbnail = os.path.join(downloads.thumbnail_path, filename.replace('.MP4', '.jpg'))
-        if os.path.exists(thumbnail):
-            os.remove(thumbnail)
-        db = DownloadsDB(config)
-        db.remove_downloaded(filename)
-        return jsonify({"message": f"{filename} deleted successfully."}), 200
-    return jsonify({"error": f"File '{filename}' not found."}), 404
+    # `filename` was previously joined straight onto the download directory, so
+    # a request for "../../../etc/whatever" deleted files anywhere the process
+    # could reach. Only bare clip names are accepted, and the resolved path is
+    # re-checked against the download directory.
+    if not is_safe_clip_name(filename):
+        logger.warning(f"Rejected delete request for {filename!r}")
+        return jsonify({"error": "Invalid filename."}), 400
+    try:
+        file_path = downloads.resolve_in_download_dir(filename)
+    except ValueError:
+        return jsonify({"error": "Invalid filename."}), 400
+
+    if not os.path.isfile(file_path):
+        return jsonify({"error": f"File '{filename}' not found."}), 404
+
+    os.remove(file_path)
+    thumbnail = os.path.join(downloads.thumbnail_path, filename[:-4] + '.jpg')
+    if os.path.isfile(thumbnail):
+        os.remove(thumbnail)
+    db = DownloadsDB(config)
+    db.remove_downloaded(filename)
+    logger.info(f"Deleted {filename}")
+    return jsonify({"message": f"{filename} deleted successfully."}), 200
 
 @app.route('/storage/locked')
 def list_files():
@@ -373,34 +541,94 @@ def mjpeg_stream():
 
 @app.route('/api/cam/info')
 def api_cam_info():
-    if not cam_status.connected:
-        return jsonify({"error": "Camera not connected"}), 503
     try:
         return jsonify(cam.get_camera_info())
+    except CameraOffline:
+        return jsonify({"error": "Camera not connected"}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+_known_cmds = cam.known_commands()
+
+
+def is_known_cmd(cmd):
+    return cmd in _known_cmds
+
+
+CAM_ACTIONS = {
+    'start_recording': lambda: cam.start_recording(),
+    'stop_recording':  lambda: cam.stop_recording(),
+    'take_photo':      lambda: cam.take_photo(),
+}
 
 
 @app.route('/api/cam/control', methods=['POST'])
 def api_cam_control():
-    if not cam_status.connected:
-        return jsonify({"error": "Camera not connected"}), 503
-    data = request.get_json()
+    data = request.get_json(silent=True)
     action = data.get('action') if data else None
+    handler = CAM_ACTIONS.get(action)
+    if not handler:
+        return jsonify({"error": f"Unknown action: {action}"}), 400
     try:
-        if action == 'start_recording':
-            result = cam.start_recording()
-        elif action == 'stop_recording':
-            result = cam.stop_recording()
-        elif action == 'take_photo':
-            result = cam.take_photo()
-        else:
-            return jsonify({"error": f"Unknown action: {action}"}), 400
-        if result.get('rval', -1) != 0:
-            return jsonify({"error": f"Camera returned rval={result.get('rval')}"}), 500
-        return jsonify(result)
+        result = handler()
+    except CameraOffline:
+        return jsonify({"error": "Camera not connected"}), 503
+    except Exception as e:
+        logger.error(f"Camera action {action} failed: {e}")
+        return jsonify({"error": str(e)}), 502
+
+    rval = result.get('rval', -1)
+    if rval != 0:
+        # Hand back what the camera actually said. "Nothing happened" with no
+        # detail is impossible to debug; rval -13 (unsupported command) and a
+        # rejected value look identical from the UI otherwise.
+        logger.warning(f"Camera rejected {action}: rval={rval} raw={result.get('raw')!r}")
+        return jsonify({
+            "error": f"Camera rejected the command (rval={rval})",
+            "rval": rval,
+            "camera_response": result.get('raw'),
+        }), 502
+    return jsonify(result)
+
+
+@app.route('/api/cam/settings/all')
+def api_cam_settings_all():
+    """Every setting for this model in one request.
+
+    The settings page used to issue one request per setting on load; the camera
+    could not keep up with that many connections and would start dropping them
+    (and sometimes the WiFi link with it).
+    """
+    try:
+        return jsonify({"settings": cam.read_all_settings()})
+    except CameraOffline:
+        return jsonify({"error": "Camera not connected"}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/cam/raw')
+def api_cam_raw():
+    """Diagnostic passthrough: issue one camera command and show the raw reply.
+
+    Deliberately read-only unless a value is supplied, and it echoes the
+    unparsed body so an unsupported command or an unexpected firmware response
+    format can be identified from the browser.
+    """
+    cmd = request.args.get('cmd', type=int)
+    if cmd is None:
+        return jsonify({"error": "Missing cmd"}), 400
+    value = request.args.get('value')
+    if value is not None and not is_known_cmd(cmd):
+        return jsonify({"error": f"Refusing to write unknown command: {cmd}"}), 400
+    try:
+        result = cam.set_setting(cmd, value) if value is not None else cam.get_setting(cmd)
+        return jsonify({"cmd": cmd, "sent_value": value, "result": result})
+    except CameraOffline:
+        return jsonify({"error": "Camera not connected"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route('/cam/settings')
@@ -413,21 +641,31 @@ def cam_settings():
 
 @app.route('/api/cam/setting/<int:cmd>', methods=['GET', 'POST'])
 def api_cam_setting(cmd):
-    if not cam_status.connected:
-        return jsonify({"error": "Camera not connected"}), 503
+    if not is_known_cmd(cmd):
+        # Only commands this model actually advertises. Stops the endpoint from
+        # being a generic write channel into the camera's whole command space.
+        return jsonify({"error": f"Unknown command: {cmd}"}), 400
     try:
         if request.method == 'POST':
-            data = request.get_json()
+            data = request.get_json(silent=True)
             if not data or 'value' not in data:
                 return jsonify({"error": "Missing 'value' in request body"}), 400
             result = cam.set_setting(cmd, data['value'])
-            if result.get('rval', -1) != 0:
-                return jsonify({"error": f"Camera returned rval={result.get('rval')}"}), 500
+            rval = result.get('rval', -1)
+            if rval != 0:
+                logger.warning(f"Camera rejected cmd {cmd}: rval={rval} raw={result.get('raw')!r}")
+                return jsonify({
+                    "error": f"Camera rejected the change (rval={rval})",
+                    "rval": rval,
+                    "camera_response": result.get('raw'),
+                }), 502
             return jsonify(result)
-        result = cam.get_setting(cmd)
-        return jsonify(result)
+        return jsonify(cam.get_setting(cmd))
+    except CameraOffline:
+        return jsonify({"error": "Camera not connected"}), 503
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Camera setting {cmd} failed: {e}")
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route('/cam/locked')
@@ -465,11 +703,37 @@ def list_cam_files():
 # Startup: initial camera check, then launch background threads
 # ---------------------------------------------------------------------------
 
-cam.check_camera_connection()
-cam_status.update(cam)
+def _startup():
+    # Progress rows describe a transfer that died with the previous process.
+    try:
+        DownloadsDB(config).clear_all_progress()
+    except Exception as e:
+        logger.warning(f"Could not clear stale progress rows: {e}")
 
-threading.Thread(target=camera_check_loop, daemon=True).start()
-threading.Thread(target=downloader_loop, daemon=True).start()
+    # A lockfile left behind by a crash makes the UI claim a download is running
+    # forever.
+    downloads.stop_download_lock()
+
+    try:
+        cam.check_camera_connection(force=True)
+        cam_status.update(cam)
+        if cam_status.connected:
+            camera_online.set()
+            if downloads.use_playback_mode:
+                # A previous run killed mid-download could have left the camera
+                # in playback mode, i.e. not recording. Put it back.
+                cam.restore_video_mode()
+    except Exception as e:
+        logger.error(f"Initial camera check failed: {e}")
+
+    threading.Thread(target=camera_check_loop, daemon=True, name="camera-check").start()
+    threading.Thread(target=downloader_loop, daemon=True, name="downloader").start()
+
+
+_startup()
 
 if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0")
+    # debug=True exposes the Werkzeug console, which is remote code execution
+    # for anyone who can reach the port. Opt in explicitly via DASHY_DEBUG for
+    # local development only.
+    app.run(host="0.0.0.0", debug=os.environ.get("DASHY_DEBUG") == "1", threaded=True)

@@ -75,41 +75,66 @@ function showToast(msg, ok) {
     toast._timer = setTimeout(function() { toast.style.display = 'none'; }, 2500);
 }
 
+var FIELD_STYLE = 'background:#0d1117;color:#c9d1d9;border-color:#30363d;';
+
+// Values come from the camera, so they are built with DOM APIs rather than
+// interpolated into innerHTML.
 function renderControl(cmd, data) {
     var container = document.getElementById('ctrl-' + cmd);
     if (!container) return;
 
-    if (data.error) {
-        container.innerHTML = '<span class="text-muted small">' + data.error + '</span>';
+    container.textContent = '';
+
+    if (!data || data.error) {
+        var err = document.createElement('span');
+        err.className = 'text-muted small';
+        err.textContent = (data && data.error) ? data.error : 'unavailable';
+        container.appendChild(err);
         return;
     }
 
-    var curValue = data.cur_value || '';
-    var options = data.options || [];
+    var curValue = data.cur_value == null ? '' : String(data.cur_value);
+    var options = Array.isArray(data.options) ? data.options : [];
 
     // WiFi Name / Password: text input
     if (cmd == 3003 || cmd == 3004) {
-        var type = cmd == 3004 ? 'password' : 'text';
-        container.innerHTML =
-            '<div class="input-group input-group-sm">' +
-            '<input type="' + type + '" class="form-control form-control-sm" style="background:#0d1117;color:#c9d1d9;border-color:#30363d;" value="' + curValue.replace(/"/g, '&quot;') + '" id="input-' + cmd + '">' +
-            '<button class="btn btn-sm btn-outline-secondary" onclick="saveSetting(' + cmd + ', document.getElementById(\'input-' + cmd + '\').value)">Save</button>' +
-            '</div>';
+        var group = document.createElement('div');
+        group.className = 'input-group input-group-sm';
+
+        var input = document.createElement('input');
+        input.type = (cmd == 3004) ? 'password' : 'text';
+        input.className = 'form-control form-control-sm';
+        input.style.cssText = FIELD_STYLE;
+        input.value = curValue;
+        input.id = 'input-' + cmd;
+
+        var button = document.createElement('button');
+        button.className = 'btn btn-sm btn-outline-secondary';
+        button.type = 'button';
+        button.textContent = 'Save';
+        button.addEventListener('click', function() { saveSetting(cmd, input.value); });
+
+        group.appendChild(input);
+        group.appendChild(button);
+        container.appendChild(group);
         return;
     }
 
     // Dropdown for everything else
-    var sel = '<select class="form-select form-select-sm" style="background:#0d1117;color:#c9d1d9;border-color:#30363d;" onchange="saveSetting(' + cmd + ', this.value)">';
-    if (options.length === 0) {
-        sel += '<option value="' + curValue + '">' + curValue + '</option>';
-    } else {
-        options.forEach(function(opt) {
-            var selected = (opt === curValue) ? ' selected' : '';
-            sel += '<option value="' + opt + '"' + selected + '>' + opt + '</option>';
-        });
-    }
-    sel += '</select>';
-    container.innerHTML = sel;
+    var sel = document.createElement('select');
+    sel.className = 'form-select form-select-sm';
+    sel.style.cssText = FIELD_STYLE;
+    sel.addEventListener('change', function() { saveSetting(cmd, sel.value); });
+
+    var values = options.length ? options : [curValue];
+    values.forEach(function(opt) {
+        var option = document.createElement('option');
+        option.value = opt;
+        option.textContent = opt;
+        if (String(opt) === curValue) option.selected = true;
+        sel.appendChild(option);
+    });
+    container.appendChild(sel);
 }
 
 function saveSetting(cmd, value) {
@@ -123,28 +148,36 @@ function saveSetting(cmd, value) {
         if (res.ok) {
             showToast('Saved', true);
         } else {
-            showToast('Error: ' + (res.data.error || 'unknown'), false);
+            // Surface what the camera said, not just "error" -- a rejected
+            // value and an unsupported command need different fixes.
+            var msg = res.data.error || 'unknown';
+            if (res.data.camera_response) msg += ' — ' + res.data.camera_response;
+            showToast(msg, false);
         }
     })
     .catch(function(e) { showToast('Request failed', false); });
 }
 
 {% if cam_status == 'connected' %}
-// Load all settings on page load
-var cmds = [
-    {% for group, items in settings.items() %}
-    {% for setting in items %}{{ setting.cmd }},
-    {% endfor %}
-    {% endfor %}
-];
-
-cmds.forEach(function(cmd) {
-    fetch('/api/cam/setting/' + cmd)
-    .then(function(r) { return r.json(); })
-    .then(function(data) { renderControl(cmd, data); })
-    .catch(function() {
-        var c = document.getElementById('ctrl-' + cmd);
-        if (c) c.innerHTML = '<span class="text-muted small">failed</span>';
+// One request for the whole page. Firing ~40 parallel fetches (one per setting)
+// overwhelmed the camera's HTTP server, which would start refusing connections
+// part-way through and sometimes drop the WiFi link entirely.
+fetch('/api/cam/settings/all')
+.then(function(r) { return r.json(); })
+.then(function(payload) {
+    if (payload.error) {
+        showToast(payload.error, false);
+        return;
+    }
+    var settings = payload.settings || {};
+    Object.keys(settings).forEach(function(cmd) {
+        renderControl(cmd, settings[cmd]);
+    });
+})
+.catch(function() {
+    document.querySelectorAll('.setting-control').forEach(function(c) {
+        c.textContent = 'failed';
+        c.className = 'setting-control text-muted small';
     });
 });
 {% endif %}

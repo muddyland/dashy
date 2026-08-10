@@ -14,4 +14,9 @@ echo "Starting Nginx..."
 nginx
 
 echo "Starting Dashy..."
-exec su dashy -c "source .venv/bin/activate && python -m gunicorn -w 1 -b $GUNICORN_BIND_ADDRESS $FLASK_APP"
+# See start.sh: one worker (process-local camera state) but multiple threads, so
+# a live MJPEG stream can't block camera commands and queue polling.
+exec su dashy -c "source .venv/bin/activate && python -m gunicorn \
+    -w 1 -k gthread --threads ${DASHY_THREADS:-8} \
+    --timeout 120 --graceful-timeout 30 \
+    -b $GUNICORN_BIND_ADDRESS $FLASK_APP"

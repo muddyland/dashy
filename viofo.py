@@ -1,10 +1,16 @@
 import os, sys, shutil
 from bs4 import BeautifulSoup
 import requests
+from requests.adapters import HTTPAdapter
+import contextlib
+import ipaddress
 import json
+import re
 import sqlite3
 import socket
 import threading
+import time
+import xml.etree.ElementTree as ET
 from dashy_config import Config
 import subprocess
 from datetime import datetime, timedelta
@@ -18,19 +24,340 @@ logger.setLevel(logging.INFO)
 
 
 # ---------------------------------------------------------------------------
-# Camera settings definitions
+# Camera HTTP transport
 #
-# cmd IDs extracted from the official Viofo APK (camkit library).
-# Source classes: Command (base), Command_A129, Command_A229.
+# The dashcam runs a minimal single-threaded HTTP server on an SoC that is also
+# busy encoding video. It copes badly with several sockets at once: opening a
+# handful in parallel (the settings page used to fire ~40) makes it stall, reset
+# connections, and in the worst case drop the WiFi association entirely.
+#
+# So everything here funnels through one Session per purpose, with keep-alive
+# and a pool of exactly one connection, and control traffic is serialised behind
+# a lock. At most two sockets are ever open to the camera: one for control, one
+# for the file being downloaded.
+# ---------------------------------------------------------------------------
+
+# (connect, read). Short connect: the camera is on the LAN, so if the SYN isn't
+# answered in a couple of seconds it is gone. Bounded read: the old 900s read
+# timeout meant a link that died mid-transfer wedged the downloader for 15
+# minutes before anything noticed.
+CONTROL_TIMEOUT = (3.05, 15)
+SCRAPE_TIMEOUT = (3.05, 60)
+DOWNLOAD_TIMEOUT = (3.05, 45)
+
+# Serialises control/settings/listing requests against the camera.
+_CONTROL_LOCK = threading.Lock()
+
+
+def _new_session():
+    """Session with keep-alive and a single pooled connection to the camera."""
+    session = requests.Session()
+    # max_retries=0: retries are handled at the call site, where we can back off
+    # and re-check the connection rather than hammering a camera that is busy.
+    adapter = HTTPAdapter(pool_connections=1, pool_maxsize=1, max_retries=0)
+    session.mount('http://', adapter)
+    session.headers.update({
+        'Connection': 'keep-alive',
+        'User-Agent': 'Dashy',
+    })
+    return session
+
+
+# One session for short control calls, one for long file transfers, so a
+# download in flight never delays a settings read (and vice versa).
+_control_session = _new_session()
+_download_session = _new_session()
+
+
+def _reset_sessions():
+    """Drop pooled sockets. Called when the camera goes away so we never try to
+    reuse a keep-alive connection that died with the WiFi link."""
+    global _control_session, _download_session
+    for old in (_control_session, _download_session):
+        try:
+            old.close()
+        except Exception:
+            pass
+    _control_session = _new_session()
+    _download_session = _new_session()
+
+
+def _parse_camera_response(response):
+    """Normalise a camera reply into a dict with at least an 'rval' key.
+
+    Firmware revisions disagree on the wire format: some return JSON
+    ({"rval":0,"cur_value":"On","options":[...]}), others return XML
+    (<Function><Cmd>2002</Cmd><Status>0</Status><Value>On</Value></Function>).
+    Calling .json() on the XML ones raised, which is why camera commands looked
+    like they silently did nothing. Always keep the raw body for diagnostics.
+    """
+    text = (response.text or '').strip()
+    if not text:
+        # Some firmwares answer a successful set with an empty 200.
+        return {"rval": 0, "raw": ""}
+
+    if text[0] in '{[':
+        try:
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                parsed.setdefault("rval", 0)
+                parsed.setdefault("raw", text)
+                return parsed
+            return {"rval": 0, "value": parsed, "raw": text}
+        except ValueError:
+            pass
+
+    if text[0] == '<':
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            return {"rval": -1, "raw": text, "error": "Unparseable camera response"}
+
+        result = {"raw": text}
+        options = []
+        for child in root:
+            tag = child.tag.lower()
+            value = (child.text or '').strip()
+            if tag in ('option', 'setting', 'item'):
+                options.append(value)
+            elif tag == 'status':
+                # <Status> is overloaded: the result code for a SET, but the
+                # current value for a GET. Keep both readings so callers can
+                # pick the one that applies.
+                result['rval'] = _to_int(value, -1)
+                result['status_value'] = _to_int(value, value)
+            elif tag == 'cmd':
+                result['type'] = _to_int(value, None)
+            elif tag in ('value', 'cur_value', 'string'):
+                result['cur_value'] = value
+            elif tag == 'param':
+                result['param'] = _to_int(value, value)
+            else:
+                result[tag] = value
+        if options:
+            result['options'] = options
+        result.setdefault('rval', 0)
+        return result
+
+    # Plain-text body. Treat a bare number as an rval, anything else as opaque.
+    as_int = _to_int(text, None)
+    if as_int is not None:
+        return {"rval": as_int, "raw": text}
+    return {"rval": 0, "cur_value": text, "raw": text}
+
+
+def _parse_all_settings(text):
+    """Parse the bulk settings document returned by cmd 3014.
+
+    The camera answers with a run of <Function> blocks, each carrying the
+    command id and that setting's current value:
+
+        <Function><Cmd>2002</Cmd><Status>1</Status></Function>
+        <Function><Cmd>9212</Cmd><Status>0</Status></Function>
+
+    Note the current value arrives in <Status>, not <Value>. Returns
+    {cmd: value_string}, empty if this isn't a bulk response.
+    """
+    text = (text or '').strip()
+    if not text.startswith('<'):
+        return {}
+    # A bulk reply is a sequence of sibling elements with no single root.
+    try:
+        root = ET.fromstring(f"<Root>{_strip_xml_decl(text)}</Root>")
+    except ET.ParseError:
+        return {}
+
+    settings = {}
+    for function in root.iter():
+        cmd = None
+        value = None
+        for child in function:
+            tag = child.tag.lower()
+            if tag == 'cmd':
+                cmd = _to_int(child.text)
+            elif tag in ('status', 'string') and value is None:
+                value = (child.text or '').strip()
+        if cmd is not None and value is not None:
+            settings[cmd] = value
+    # One <Function> alone is an ordinary single-command reply, not a table.
+    return settings if len(settings) > 1 else {}
+
+
+def _strip_xml_decl(text):
+    return re.sub(r'^\s*<\?xml[^>]*\?>', '', text).strip()
+
+
+def _camera_path_to_url(path):
+    """Turn a camera filesystem path into an HTTP path.
+
+    The camera reports paths like `A:\\DCIM\\Movie\\RO\\2025_0313_042216_47F.MP4`.
+    The part after the drive colon is what the web server serves.
+    """
+    normalised = (path or '').replace('\\', '/')
+    _, sep, tail = normalised.partition(':')
+    if sep:
+        normalised = tail
+    if not normalised.startswith('/'):
+        normalised = '/' + normalised
+    return normalised
+
+
+def _parse_file_list(text):
+    """Parse the XML file list returned by cmd 3015.
+
+    The response is a run of <File> blocks, each carrying NAME, FPATH, SIZE,
+    TIMECODE, TIME and ATTR. This is strictly
+    better than scraping the HTML directory index -- it is one request for the
+    whole card, and it gives real size and timestamp instead of inferring the
+    timestamp from the filename.
+    """
+    text = (text or '').strip()
+    if not text.startswith('<'):
+        return []
+    try:
+        root = ET.fromstring(f"<Root>{_strip_xml_decl(text)}</Root>")
+    except ET.ParseError:
+        return []
+
+    files = []
+    for element in root.iter():
+        if element.tag.upper() != 'FILE':
+            continue
+        entry = {}
+        for child in element:
+            entry[child.tag.upper()] = (child.text or '').strip()
+        name = entry.get('NAME')
+        path = entry.get('FPATH')
+        if not name or not path:
+            continue
+        files.append({
+            'name': name,
+            'path': path,
+            'size': _to_int(entry.get('SIZE'), 0),
+            'timecode': _to_int(entry.get('TIMECODE'), 0),
+            'time': entry.get('TIME', ''),
+            'attr': _to_int(entry.get('ATTR'), 0),
+        })
+    return files
+
+
+def _to_int(value, default=None):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+_HOSTNAME_RE = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9\-\.]*[A-Za-z0-9])?$')
+
+
+def _looks_like_host(value):
+    """True for an IP literal or plausible hostname.
+
+    Exists to reject the "10.x.x.x" placeholder shipped in
+    config_template.json. Left in the config it reached getaddrinfo on every
+    connection check, and the resulting gaierror escaped and killed the status
+    thread.
+    """
+    if not value:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
+    if not _HOSTNAME_RE.match(value):
+        return False
+    # Placeholder octets ("10.x.x.x", "192.168.x.x") are never real hostnames.
+    return not any(label.lower() in ('x', 'xx', 'xxx') for label in value.split('.'))
+
+
+class CameraOffline(Exception):
+    """Raised when an operation needs the camera and it is not reachable."""
+
+
+def classify_lens(name):
+    """Which camera a clip came from.
+
+    Keyed off the character immediately before the extension: F front,
+    R rear, I interior, T front-tele. Dashy previously did a substring test for
+    "R" anywhere in the sequence field, which mislabels anything that isn't a
+    plain F/R suffix.
+    """
+    lowered = name.lower()
+    if 'f.' in lowered:
+        return 'Front'
+    if 'i.' in lowered:
+        return 'Interior'
+    if 'r.' in lowered:
+        return 'Rear'
+    if 't.' in lowered:
+        return 'Front Tele'
+    return 'Unknown'
+
+
+def classify_mode(path, name=''):
+    """Driving vs parking, from the directory the clip lives in.
+
+    The directory is the reliable signal across models. The filename's P
+    marker is only a fallback for local files with no path context.
+    """
+    if 'parking' in (path or '').lower():
+        return 'Parking'
+    stem = name.rsplit('.', 1)[0]
+    # Parking clips end PF/PR; a bare trailing P also appears on some models.
+    return 'Parking' if re.search(r'P[FRIT]?$', stem) else 'Driving'
+
+
+def is_locked_path(path):
+    """Locked (protected) clips live under an RO directory."""
+    return 'RO' in (path or '')
+
+
+# Clip names look like 20240115123456_0001F.MP4 (A129) or
+# 2025_0313_042216_000047F.MP4 (A229). Nothing that fails this pattern should
+# ever reach the filesystem, a shell, or a URL we build -- the camera is not a
+# trusted source of filenames.
+_CLIP_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}\.(?:MP4|mp4)$')
+
+
+def is_safe_clip_name(name):
+    """True if `name` is a plain clip filename with no path or shell syntax."""
+    if not name or not isinstance(name, str):
+        return False
+    if '/' in name or '\\' in name or name.startswith('.'):
+        return False
+    return _CLIP_NAME_RE.match(name) is not None
+
+
+def is_safe_clip_url(url):
+    """True if `url` is a camera clip path we are willing to fetch.
+
+    Constrains the queue to real clip paths under /DCIM: without this, anything
+    handed to /storage/grab was concatenated onto the camera base URL and its
+    last path segment used as a local filename.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    if not url.startswith('/DCIM/') or '..' in url:
+        return False
+    directory, _, name = url.rpartition('/')
+    return directory in Camera.CLIP_DIRS.values() and is_safe_clip_name(name)
+
+
+# ---------------------------------------------------------------------------
+# Camera settings definitions
 #
 # HTTP API:
 #   Get:  GET http://IP/?custom=1&cmd=<N>
-#         → {"rval":0,"type":N,"cur_value":"...","options":[...]}
-#   Set:  GET http://IP/?custom=1&cmd=<N>&param_0=<value>
-#         → {"rval":0,"type":N}
+#   Set:  GET http://IP/?custom=1&cmd=<N>&par=<number>
+#         GET http://IP/?custom=1&cmd=<N>&str=<text>
+#
+# Most firmware answers in XML; some models answer JSON. See
+# _parse_camera_response.
 # ---------------------------------------------------------------------------
 
-# Base command IDs shared by all supported models (from Command class in camkit).
+# Base command IDs shared by all supported models.
 _CMD_BASE = {
     # Video
     "MOVIE_RESOLUTION":       2002,
@@ -64,7 +391,7 @@ _CMD_BASE = {
     "WIFI_PWD":               3004,
 }
 
-# A129-Plus overrides (Command_A129 in camkit).
+# A129-Plus overrides.
 _CMD_A129 = {
     **_CMD_BASE,
     "BEEP_SOUND":                9403,
@@ -72,7 +399,7 @@ _CMD_A129 = {
     "ENTER_PARKING_MODE_TIMER":  9435,
 }
 
-# A229-Plus overrides (Command_A229 in camkit).
+# A229-Plus overrides.
 # Note: cmd 9220 is INTERIOR_CAMERA_MIRROR on A229, not PARKING_G_SENSOR.
 _CMD_A229 = {
     **_CMD_BASE,
@@ -171,16 +498,24 @@ CAMERA_SETTINGS = {
 
 
 # Control and status command IDs (not settings; used for direct actions and queries).
-# Source: Command class in Viofo APK camkit library.
+# Verified against the camera's own behaviour.
 _CMD_CONTROL = {
-    "MOVIE_RECORD":      2001,  # GET → current state; param_0=1 → start, param_0=0 → stop
-    "PHOTO_CAPTURE":     1001,  # GET → trigger photo
-    "CARD_FREE_SPACE":   3017,  # GET → {param: free_mb}
-    "FIRMWARE_VERSION":  3012,  # GET → {cur_value: "SA_A229_V2.1_..."}
-    "GET_CURRENT_STATE": 3014,  # GET → {msg: "record"|"idle"|...}
-    "GET_BATTERY_LEVEL": 3019,  # GET → {param: percent_0_to_100}
-    "GET_CARD_STATUS":   3024,  # GET → {param: 1=ok, 0=missing/error}
+    "MOVIE_RECORD":      2001,  # par=1 → start, par=0 → stop
+    "PHOTO_CAPTURE":     1001,  # trigger photo
+    "CHANGE_MODE":       3001,  # par=1 → video/record mode, par=2 → playback mode
+    "CARD_FREE_SPACE":   3017,
+    "FIRMWARE_VERSION":  3012,
+    "GET_ALL_SETTINGS":  3014,  # returns EVERY setting in one XML document
+    "HEART_BEAT":        3016,  # keeps the camera's session alive
+    "GET_FILE_LIST":     3015,  # XML file list (name, path, size, attr)
+    "GET_BATTERY_LEVEL": 3019,
+    "GET_CARD_STATUS":   3024,
+    "DELETE_ONE_FILE":   4003,
 }
+
+# cmd 3001 parameters.
+MODE_VIDEO = 1
+MODE_PLAYBACK = 2
 
 
 class CameraStatus:
@@ -201,145 +536,340 @@ class CameraStatus:
             self.base_url = camera.base_url
 
 class Camera:
+    # A successful probe is trusted for this long. The downloader used to probe
+    # port 80 before every single file while the previous transfer's socket was
+    # still in TIME_WAIT, which is a big part of why the camera appeared to
+    # connect and disconnect constantly.
+    PROBE_TTL = 20
+    # A failed probe is retried sooner, so pulling into the driveway is noticed
+    # quickly rather than being held off by a stale "disconnected".
+    PROBE_TTL_FAILED = 3
+    PROBE_TIMEOUT = 2
+
     def __init__(self, config, check_connection=False):
         if not isinstance(config, Config):
             raise Exception("You must pass the config as a Config class")
-        
-        # Get data from config 
+
+        # Get data from config
         config_data = config.config_data
-        
+
         # Create variables from config
         self.config = config
         self.cam_ip = config_data.get("cam_ip", "192.168.1.254")
         self.cam_wifi_ip = config_data.get("cam_wifi_ip", None)
         self.cam_model = config_data.get('cam_model', "A129-Plus")
-        self.cam_ip_list = [self.cam_ip, self.cam_wifi_ip] if self.cam_wifi_ip and isinstance(self.cam_wifi_ip, str) else [self.cam_ip]
+        self.cam_port = int(config_data.get("cam_port", 80) or 80)
+
+        # Probe the home-WiFi address first when configured: that is what the
+        # docs promise ("preferred over AP mode"), and probing the AP address
+        # first meant a timeout on every single check.
+        candidates = []
+        if self.cam_wifi_ip and isinstance(self.cam_wifi_ip, str):
+            candidates.append(self.cam_wifi_ip.strip())
+        if self.cam_ip and isinstance(self.cam_ip, str):
+            candidates.append(self.cam_ip.strip())
+        # Drop blanks/placeholders like the "10.x.x.x" in config_template.json.
+        self.cam_ip_list = [ip for ip in candidates if ip and _looks_like_host(ip)]
+        if not self.cam_ip_list:
+            logger.warning("No usable camera address configured; defaulting to 192.168.1.254")
+            self.cam_ip_list = ["192.168.1.254"]
+
+        # Connection state. Guarded by _lock because the web threads, the status
+        # poller and the downloader all touch it.
+        self._lock = threading.RLock()
+        self.connected = False
+        self.connected_string = "disconnected"
+        self.connected_ip = None
+        self.base_url = None
+        self.result = None
+        self._last_probe = 0.0
+        # Which query parameter this firmware accepts for setting values;
+        # detected once on the first successful set (see set_setting).
+        self._set_param_name = config_data.get("cam_set_param") or None
+        # cmd 3015 file-list support: None until probed, then True/False.
+        self._file_list_supported = None
+        self._file_list_cache = None
+        self._file_list_at = 0.0
+
         if check_connection:
             self.check_camera_connection()
-            
-    def check_camera_connection(self, return_as_string=False):
-        result = None
-        
-        for ip in self.cam_ip_list:
-            logger.info(f"Checking {self.cam_model} IP {ip}")
-            # Check to see if port 80 is open on wifi IP first
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(10)
-                result = s.connect_ex((ip, 80))
-                
-        
-            if result == 0:
-                self.connected_ip = ip
+
+    def check_camera_connection(self, return_as_string=False, force=False):
+        """Probe the camera's HTTP port and update cached connection state.
+
+        Cheap to call: a recent result is reused rather than opening a fresh
+        socket, and the previous state is only replaced once every candidate
+        address has been tried, so callers never observe a transient
+        "disconnected" mid-probe.
+        """
+        with self._lock:
+            age = time.monotonic() - self._last_probe
+            ttl = self.PROBE_TTL if self.connected else self.PROBE_TTL_FAILED
+            if not force and self._last_probe and age < ttl:
+                return self.connected_string if return_as_string else self.connected
+
+            was_connected = self.connected
+            found_ip = None
+            last_result = None
+
+            for ip in self.cam_ip_list:
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.settimeout(self.PROBE_TIMEOUT)
+                        last_result = s.connect_ex((ip, self.cam_port))
+                except OSError as e:
+                    # gaierror/ENETUNREACH used to escape this method and kill
+                    # the status thread outright, freezing the UI on
+                    # "disconnected" until Dashy was restarted.
+                    logger.debug(f"Probe of {ip}:{self.cam_port} failed: {e}")
+                    last_result = getattr(e, 'errno', -1)
+                    continue
+
+                if last_result == 0:
+                    found_ip = ip
+                    break
+
+            self._last_probe = time.monotonic()
+            self.result = last_result
+
+            if found_ip:
+                changed = not was_connected or self.connected_ip != found_ip
+                if self.connected_ip and self.connected_ip != found_ip:
+                    # Moved between AP and home WiFi: pooled sockets point at
+                    # the old address.
+                    _reset_sessions()
                 self.connected = True
                 self.connected_string = "connected"
-                self.base_url = f"http://{ip}:80"
-                self.result = result
-                break
+                self.connected_ip = found_ip
+                self.base_url = f"http://{found_ip}:{self.cam_port}"
+                if changed:
+                    logger.info(f"{self.cam_model} connected at {found_ip}")
             else:
                 self.connected = False
-                self.connected_ip = None
                 self.connected_string = "disconnected"
+                self.connected_ip = None
                 self.base_url = None
-                self.result = result
-                
-        logger.info(f"{self.cam_model} {self.connected_string} from IP {self.connected_ip}")
-        
-        if return_as_string:
-            return self.connected_string
-        else:
-            return self.connected
-        
+                if was_connected:
+                    logger.info(f"{self.cam_model} disconnected")
+                    _reset_sessions()
+
+            return self.connected_string if return_as_string else self.connected
+
+    def require_base_url(self):
+        """Return the camera base URL, or raise if it is not reachable."""
+        with self._lock:
+            if self.connected and self.base_url:
+                return self.base_url
+        # Cached state says down -- confirm before giving up, the camera may
+        # have just come back.
+        if self.check_camera_connection():
+            with self._lock:
+                if self.base_url:
+                    return self.base_url
+        raise CameraOffline("Camera is not connected")
+
     @property
     def settings(self):
         """Return the settings definition for the configured camera model."""
         return CAMERA_SETTINGS.get(self.cam_model, {})
 
-    def scrape_webserver(self, mode="driving", locked=True):
-        if not self.connected or not self.base_url:
-            raise Exception("Camera is not connected, impossible to scrape")
-        
-        # Open Downloads DB to tag a video as downloaded
-        downloads = DownloadsDB(self.config)
-        
-        if mode == "parking" and locked:
-            file_dir = "/DCIM/Movie/Parking/RO"
-        elif mode == "driving" and locked:
-            file_dir = "/DCIM/Movie/RO"
-        elif mode == "driving" and not locked:
-            file_dir = "/DCIM/Movie"
-        elif mode == "parking" and not locked:
-            file_dir = "/DCIM/Movie/Parking"
-        
-        response = requests.get(self.base_url + file_dir, timeout=180)
-        if response.status_code == 200:
-            html_content = response.text
+    def known_commands(self):
+        """Command IDs this model advertises, plus the control/status commands."""
+        cmds = {item['cmd'] for group in self.settings.values() for item in group}
+        cmds.update(_CMD_CONTROL.values())
+        return cmds
 
-            soup = BeautifulSoup(html_content, 'html.parser')
-            file_urls = []
-            for a_tag in soup.find_all('a'):
-                href = a_tag.get('href')
-                if '.MP4' in href and 'del=1' not in href:
-                    file_name = href.replace(f"{file_dir}/", "") 
-                    file_info = self.parse_filename(file_name)
-                    file_info['downloaded'] = downloads.check_downloaded(href)
-                    file_info['in_queue'] = downloads.check_downloads_queue(href)
-                    file_info['dir'] = file_dir
-                    file_urls.append(file_info)
+    CLIP_DIRS = {
+        ("parking", True):  "/DCIM/Movie/Parking/RO",
+        ("driving", True):  "/DCIM/Movie/RO",
+        ("driving", False): "/DCIM/Movie",
+        ("parking", False): "/DCIM/Movie/Parking",
+    }
 
-            if file_urls:
-                return sorted(file_urls, key=lambda x: x['created_date'], reverse=True)
-            else:
-                return []
-        elif response.status_code == 404:
+    def scrape_webserver(self, mode="driving", locked=True, db=None):
+        base_url = self.require_base_url()
+
+        file_dir = self.CLIP_DIRS.get((mode, bool(locked)))
+        if not file_dir:
+            raise ValueError(f"Unknown listing mode: {mode!r}")
+
+        # One query each for the downloaded/queued sets instead of two per
+        # file: a full card can list hundreds of clips.
+        downloads = db or DownloadsDB(self.config)
+        downloaded = set(downloads.load_downloaded_files())
+        queued = set(downloads.load_download_queue())
+
+        listing = self._list_via_api(file_dir, downloaded, queued)
+        if listing is not None:
+            return listing
+
+        with _CONTROL_LOCK:
+            response = _control_session.get(base_url + file_dir, timeout=SCRAPE_TIMEOUT)
+
+        if response.status_code == 404:
             raise Exception(f"Camera does not have any video files in: {file_dir}, are you sure there are any files here?")
-        else:
+        if response.status_code != 200:
             raise Exception(f"Camera did not return expected status code 200: {response.status_code} - {response.text}")
-        
-    def parse_filename(self, file_name):
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        file_urls = []
+        for a_tag in soup.find_all('a'):
+            href = a_tag.get('href') or ''
+            if '.MP4' not in href.upper() or 'del=1' in href:
+                continue
+            file_name = href.replace(f"{file_dir}/", "").lstrip('/')
+            if not is_safe_clip_name(file_name):
+                logger.warning(f"Ignoring clip with unexpected name from camera: {file_name!r}")
+                continue
+            try:
+                file_info = self.parse_filename(file_name, file_dir)
+            except (ValueError, IndexError) as e:
+                # A clip whose name doesn't match the model's pattern must not
+                # abort the whole listing.
+                logger.warning(f"Skipping unparseable filename {file_name!r}: {e}")
+                continue
+            file_info['downloaded'] = href in downloaded
+            file_info['in_queue'] = href in queued
+            file_info['dir'] = file_dir
+            file_urls.append(file_info)
+
+        return sorted(file_urls, key=lambda x: x['created_date'], reverse=True)
+
+    # cmd 3015 covers the whole card, so cache it briefly rather than issuing
+    # it once per directory the UI asks about.
+    FILE_LIST_TTL = 10
+
+    def _fetch_file_list(self):
+        """All files on the card via cmd 3015, or None if unsupported."""
+        now = time.monotonic()
+        with self._lock:
+            if self._file_list_cache is not None and now - self._file_list_at < self.FILE_LIST_TTL:
+                return self._file_list_cache
+
+        if self._file_list_supported is False:
+            return None
+
+        try:
+            # Generous read timeout: a full card is a large document and the
+            # camera is slow to assemble it.
+            response = self._request(
+                {"custom": 1, "cmd": _CMD_CONTROL["GET_FILE_LIST"]},
+                timeout=(CONTROL_TIMEOUT[0], 100),
+            )
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.warning(f"File list command failed ({e}); falling back to directory listing")
+            self._file_list_supported = False
+            return None
+
+        files = _parse_file_list(response.get('raw', ''))
+        if not files:
+            logger.info("Camera did not return a file list; using directory listing instead")
+            self._file_list_supported = False
+            return None
+
+        self._file_list_supported = True
+        with self._lock:
+            self._file_list_cache = files
+            self._file_list_at = now
+        return files
+
+    def _list_via_api(self, file_dir, downloaded, queued):
+        """Build a listing for `file_dir` from the cmd 3015 file table.
+
+        Returns None if the camera doesn't support it, so the caller falls back
+        to scraping the HTML directory index. Preferred because it reports the
+        real timestamp and size instead of inferring them from the filename,
+        which is what makes unsupported models work.
+        """
+        files = self._fetch_file_list()
+        if not files:
+            return None
+
+        results = []
+        for entry in files:
+            url_path = _camera_path_to_url(entry['path'])
+            directory, _, file_name = url_path.rpartition('/')
+            if directory != file_dir:
+                continue
+            if not is_safe_clip_name(file_name):
+                logger.warning(f"Ignoring clip with unexpected name from camera: {file_name!r}")
+                continue
+
+            created_date = self._entry_timestamp(entry, file_name)
+            if created_date is None:
+                logger.warning(f"Skipping clip with no usable timestamp: {file_name!r}")
+                continue
+
+            results.append({
+                'filename': file_name,
+                'name': created_date.strftime("%m/%d/%Y %I:%M %p"),
+                'created_date': created_date,
+                'created_date_formatted': created_date.strftime("%m/%d/%Y %I:%M %p"),
+                'location': classify_lens(file_name),
+                'number': file_name.rsplit('.', 1)[0].split('_')[-1],
+                'dir': file_dir,
+                'mode': classify_mode(file_dir, file_name),
+                'thumbnail': file_name.rsplit('.', 1)[0] + '.jpg',
+                'size': entry['size'],
+                'downloaded': url_path in downloaded,
+                'in_queue': url_path in queued,
+            })
+
+        return sorted(results, key=lambda x: x['created_date'], reverse=True)
+
+    def _entry_timestamp(self, entry, file_name):
+        """Timestamp for a file-list entry, preferring what the camera reports."""
+        # The camera's own TIME field ("2025/03/13 04:22:16") needs no
+        # model-specific filename knowledge, so it works on models whose naming
+        # Dashy doesn't recognise.
+        raw_time = entry.get('time') or ''
+        for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(raw_time.strip(), fmt)
+            except ValueError:
+                continue
+        try:
+            return self.parse_filename(file_name)['created_date']
+        except (ValueError, IndexError, KeyError):
+            return None
+
+    def parse_filename(self, file_name, directory=''):
+        """Pull the timestamp, camera position and mode out of a clip name.
+
+        `directory` is the camera path the clip came from, which is the
+        reliable source for driving-vs-parking; local files pass nothing and
+        fall back to the filename marker.
+
+        Raises ValueError for anything that doesn't match the model's pattern;
+        callers skip those rather than failing the whole listing. Previously an
+        unrecognised name (or an unrecognised cam_model) raised NameError from
+        an unbound local, which aborted the page.
+        """
+        plain_filename = file_name.rsplit(".", 1)[0]
+        parts = plain_filename.split("_")
+
         if self.cam_model == "A129-Plus":
-            created_date_from_filename = file_name.split(".")[0].split("_")[0]  # Extract the date from the filename
-            created_date = datetime.strptime(created_date_from_filename, '%Y%m%d%H%M%S')
-            created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
-            if "R" in file_name.split(".")[0].split("_")[1]:
-                location = "Rear"
-                number = file_name.split(".")[0].split("_")[1]
-            elif "F" in file_name.split(".")[0].split("_")[1]:
-                location = "Front"
-                number = file_name.split(".")[0].split("_")[1]
-            else:
-                location = "Unknown"
-                number = None
-            
-            if "P" in file_name.split(".")[0].split("_")[1]:
-                mode = "Parking"
-            else:
-                mode = "Driving"
-            thumbnail_name = file_name.replace(".MP4", ".jpg")
-        elif self.cam_model == "A229-Plus":
-            # Example: 2025_0313_042216_000047F.MP4
-            plain_filename = file_name.split(".")[0]
-            date_name_split = plain_filename.split("_")
-            year = date_name_split[0]
-            month_day = date_name_split[1]
-            full_time = date_name_split[2]
-            created_date = datetime.strptime(f"{year}{month_day}{full_time}", '%Y%m%d%H%M%S')
-            created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
-            if "R" in file_name.split(".")[0].split("_")[3]:
-                location = "Rear"
-                number = file_name.split(".")[0].split("_")[3]
-            elif "F" in file_name.split(".")[0].split("_")[3]:
-                location = "Front"
-                number = file_name.split(".")[0].split("_")[3]
-            else:
-                location = "Unknown"
-                number = None
-            
-            if "P" in file_name.split(".")[0].split("_")[3]:
-                mode = "Parking"
-            else:
-                mode = "Driving"
-                     
-        thumbnail_name = file_name.replace(".MP4", ".jpg")    
+            # Example: 20240115123456_0001F.MP4
+            if len(parts) < 2:
+                raise ValueError(f"Not an A129-Plus clip name: {file_name!r}")
+            stamp = parts[0]
+            suffix = parts[1]
+        else:
+            # Example: 2025_0313_042216_000047F.MP4 (A229-Plus and similar)
+            if len(parts) < 4:
+                raise ValueError(f"Not an A229-Plus clip name: {file_name!r}")
+            stamp = f"{parts[0]}{parts[1]}{parts[2]}"
+            suffix = parts[3]
+
+        created_date = datetime.strptime(stamp, '%Y%m%d%H%M%S')
+        created_date_formatted = created_date.strftime("%m/%d/%Y %I:%M %p")
+
+        location = classify_lens(file_name)
+        number = suffix if location != "Unknown" else None
+        mode = classify_mode(directory, file_name)
+        thumbnail_name = file_name.rsplit(".", 1)[0] + ".jpg"
         return {
                 'filename': file_name, 
                 'name': created_date_formatted, 
@@ -351,24 +881,134 @@ class Camera:
                 "mode" : mode, 
                 'thumbnail' : thumbnail_name
             }
-    def get_setting(self, cmd):
-        """GET /?custom=1&cmd=N - returns parsed JSON from camera."""
-        if not self.connected or not self.base_url:
-            raise Exception("Camera is not connected")
-        url = f"{self.base_url}/?custom=1&cmd={cmd}"
-        response = requests.get(url, timeout=10)
+    def _request(self, params, timeout=CONTROL_TIMEOUT):
+        """Issue one control request, serialised against all other control
+        traffic, and return the normalised response."""
+        base_url = self.require_base_url()
+        with _CONTROL_LOCK:
+            try:
+                response = _control_session.get(base_url + "/", params=params, timeout=timeout)
+            except requests.RequestException as e:
+                # A dead keep-alive socket surfaces here; force a re-probe so
+                # the UI reflects reality instead of retrying a dead link.
+                logger.warning(f"Camera request {params} failed: {e}")
+                self.check_camera_connection(force=True)
+                raise
         response.raise_for_status()
-        return response.json()
+        parsed = _parse_camera_response(response)
+        logger.debug(f"cmd {params.get('cmd')} -> {parsed}")
+        return parsed
+
+    def get_setting(self, cmd):
+        """GET /?custom=1&cmd=N -- read a setting or status value."""
+        return self._request({"custom": 1, "cmd": int(cmd)})
 
     def set_setting(self, cmd, value):
-        """GET /?custom=1&cmd=N&param_0=VALUE - sets a camera setting."""
-        if not self.connected or not self.base_url:
-            raise Exception("Camera is not connected")
-        encoded = str(value).replace(' ', '+')
-        url = f"{self.base_url}/?custom=1&cmd={cmd}&param_0={encoded}"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json()
+        """GET /?custom=1&cmd=N&<param>=VALUE -- write a setting.
+
+        The firmware uses two different parameter names: `&par=` for numeric
+        values and `&str=` for text (WiFi name and password, custom stamp, car
+        number). Dashy only ever sent `param_0`, which these cameras accept
+        with a non-zero status and then ignore -- the change silently never
+        applied.
+
+        Numeric values go via `par`, text via `str`. `param_0` is kept as a
+        last-resort fallback for firmware that wants it, and whichever form the
+        camera accepts is remembered.
+        """
+        cmd = int(cmd)
+        numeric = _to_int(value, None)
+
+        if numeric is not None and numeric > -1:
+            candidates = ["par", "param_0"]
+            encoded = numeric
+        else:
+            # Text value. The camera decodes '+' as a space.
+            candidates = ["str", "param_0"]
+            encoded = str(value).replace(' ', '+')
+
+        if self._set_param_name in candidates:
+            # Try the known-good name first, but keep the others as fallback.
+            candidates = [self._set_param_name] + [c for c in candidates if c != self._set_param_name]
+
+        last = None
+        for name in candidates:
+            result = self._request({"custom": 1, "cmd": cmd, name: encoded})
+            last = result
+            if _to_int(result.get("rval"), -1) == 0:
+                if self._set_param_name != name:
+                    logger.info(f"Camera accepts '{name}' for set commands")
+                    self._set_param_name = name
+                return result
+            logger.debug(f"set cmd={cmd} via '{name}' returned rval={result.get('rval')}")
+
+        # Every form was rejected. Return the last reply verbatim -- the caller
+        # surfaces rval and the raw body so the failure is diagnosable instead
+        # of looking like nothing happened.
+        return last if last is not None else {"rval": -1, "error": "No response from camera"}
+
+    def heartbeat(self):
+        """Tell the camera we are still here (cmd 3016).
+
+        Sent periodically while a session is held open. Without it the camera
+        is free to decide the client has gone away and tear the connection down
+        mid-transfer.
+        """
+        return self._request({"custom": 1, "cmd": _CMD_CONTROL["HEART_BEAT"]})
+
+    def set_mode(self, mode):
+        """Switch between recording (1) and playback (2) mode via cmd 3001."""
+        return self.set_setting(_CMD_CONTROL["CHANGE_MODE"], int(mode))
+
+    @contextlib.contextmanager
+    def playback_mode(self):
+        """Put the camera in playback mode for the duration of the block.
+
+        This matters a lot: otherwise the camera is encoding 4K, writing to
+        the SD card and serving HTTP over WiFi at the same time. That
+        contention is what makes downloads crawl and connections drop
+        mid-transfer.
+
+        IMPORTANT: playback mode stops recording. Video mode is always restored
+        on the way out, including on error, and a restore is also attempted at
+        startup in case a previous run was killed mid-download.
+        """
+        entered = False
+        try:
+            result = self.set_mode(MODE_PLAYBACK)
+            entered = _to_int(result.get('rval'), -1) == 0
+            if entered:
+                logger.info("Camera switched to playback mode for transfer")
+            else:
+                # Not fatal -- downloads still work while recording, just more
+                # slowly. Don't fail the batch over it.
+                logger.warning(
+                    f"Camera refused playback mode (rval={result.get('rval')}); "
+                    "downloading while it records"
+                )
+        except Exception as e:
+            logger.warning(f"Could not switch to playback mode: {e}")
+
+        try:
+            yield entered
+        finally:
+            if entered:
+                self.restore_video_mode()
+
+    def restore_video_mode(self):
+        """Put the camera back into recording mode. Never raises."""
+        try:
+            result = self.set_mode(MODE_VIDEO)
+            if _to_int(result.get('rval'), -1) == 0:
+                logger.info("Camera returned to recording mode")
+                return True
+            logger.error(
+                f"Camera did not return to recording mode (rval={result.get('rval')}) "
+                "-- it may not be recording. Check the camera."
+            )
+        except Exception as e:
+            logger.error(f"Failed to restore recording mode: {e} -- the camera may not be recording")
+        return False
 
     @property
     def mjpeg_url(self):
@@ -378,20 +1018,69 @@ class Camera:
     def get_camera_info(self):
         """
         Fetch camera status in one call: state, free space, card health, firmware.
-        Each key contains the raw camera JSON response, or {"rval":-1, "error": str} on failure.
+        Each key holds the normalised camera response, or {"rval":-1, "error": str}
+        on failure.
         """
         result = {}
         for key, cmd in [
-            ("state",       _CMD_CONTROL["GET_CURRENT_STATE"]),
+            ("state",       _CMD_CONTROL["MOVIE_RECORD"]),
             ("free_space",  _CMD_CONTROL["CARD_FREE_SPACE"]),
             ("card_status", _CMD_CONTROL["GET_CARD_STATUS"]),
             ("firmware",    _CMD_CONTROL["FIRMWARE_VERSION"]),
         ]:
             try:
-                result[key] = self.get_setting(cmd)
+                response = self.get_setting(cmd)
+                # On XML firmware a GET returns its value in <Status>, the same
+                # field a SET uses for its result code. Surface it as `param`
+                # too so the UI reads one shape regardless of wire format.
+                if 'param' not in response and 'status_value' in response:
+                    response = dict(response, param=response['status_value'], rval=0)
+                result[key] = response
             except Exception as e:
                 result[key] = {"rval": -1, "error": str(e)}
         return result
+
+    def read_all_settings(self):
+        """Read every setting for this model.
+
+        cmd 3014 returns the whole settings table in a single XML document.
+        The settings page used to fire one request per setting (~40 of them) on
+        load, which the camera's single-threaded HTTP server could not keep up
+        with.
+
+        Falls back to reading commands individually if the camera doesn't
+        support the bulk query.
+        """
+        try:
+            response = self._request({"custom": 1, "cmd": _CMD_CONTROL["GET_ALL_SETTINGS"]})
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.warning(f"Bulk settings read failed ({e}); falling back to individual reads")
+            response = None
+
+        if response:
+            bulk = _parse_all_settings(response.get('raw', ''))
+            if bulk:
+                wanted = self.known_commands()
+                return {
+                    str(cmd): {"rval": 0, "cur_value": value}
+                    for cmd, value in bulk.items() if cmd in wanted
+                }
+            logger.info("Camera did not return a bulk settings table; reading individually")
+
+        values = {}
+        for group in self.settings.values():
+            for item in group:
+                cmd = item["cmd"]
+                try:
+                    values[str(cmd)] = self.get_setting(cmd)
+                except CameraOffline:
+                    values[str(cmd)] = {"rval": -1, "error": "Camera not connected"}
+                    return values
+                except Exception as e:
+                    values[str(cmd)] = {"rval": -1, "error": str(e)}
+        return values
 
     def start_recording(self):
         return self.set_setting(_CMD_CONTROL["MOVIE_RECORD"], 1)
@@ -429,15 +1118,40 @@ class Downloads:
         
         download_path = f"{config_data['video_path']}/locked"
         thumbnail_path = f"{config_data['video_path']}/thumbnails"
-        timeout = int(config_data.get('request_timeout', 900))
-            
+
         self.config = config
         self.db = DownloadsDB(config)
         self.base_url = cam_url
-        self.download_path = download_path
-        self.thumbnail_path = thumbnail_path
-        self.timeout = timeout
-    
+        self.download_path = os.path.abspath(download_path)
+        self.thumbnail_path = os.path.abspath(thumbnail_path)
+        # Read timeout for a transfer in flight. This is *not* a deadline for
+        # the whole file -- it is how long we wait for the next block before
+        # deciding the link is dead. The old 900s value meant a dropped WiFi
+        # link stalled the downloader for 15 minutes.
+        self.read_timeout = int(config_data.get('download_read_timeout', DOWNLOAD_TIMEOUT[1]))
+        # 256 KiB reads instead of 2 KiB: a 4K clip is 300-500 MB, which was a
+        # quarter of a million loop iterations per file. Past ~64 KiB the
+        # throughput gain flattens out, so this is sized for resume granularity
+        # instead: iter_content only yields whole chunks, so a dropped link
+        # discards up to one chunk of data that has to be fetched again.
+        self.chunk_size = int(config_data.get('download_chunk_size', 256 * 1024))
+        self.max_attempts = int(config_data.get('download_attempts', 3))
+        # Switch the camera to playback mode while downloading. Much faster and
+        # far more stable, but it stops recording for the duration -- set false
+        # to keep the camera recording throughout.
+        self.use_playback_mode = bool(config_data.get('playback_mode_for_downloads', True))
+        self._last_drain_ok = True
+
+    def resolve_in_download_dir(self, file_name):
+        """Join `file_name` to the download directory, refusing to escape it."""
+        if not is_safe_clip_name(file_name):
+            raise ValueError(f"Refusing unsafe clip name: {file_name!r}")
+        path = os.path.abspath(os.path.join(self.download_path, file_name))
+        if os.path.dirname(path) != self.download_path:
+            raise ValueError(f"Path escapes download directory: {file_name!r}")
+        return path
+
+
     def start_download_lock(self):
         with open(".download-in-progress", "w") as f:
             f.write("downloading")
@@ -450,115 +1164,300 @@ class Downloads:
             logger.warning("No lockfile to clear")
         
     def generate_preview(self, file_path, file_name):
-        logger.info("Generating Thumbnail...")
-        if not os.path.isdir(f"{self.thumbnail_path}"):
-            os.mkdir(f"{self.thumbnail_path}")
-        thumbnail_name = file_name.replace(".MP4", "") + ".jpg"
-        thumbnail_path = f"{self.thumbnail_path}/{thumbnail_name}"
-        command = f'ffmpeg -ss 1 -i "{file_path}" -vframes 1 -q:v 2 "{thumbnail_path}"'
-        
+        """Extract a single frame as a JPEG thumbnail.
+
+        Runs ffmpeg without a shell: `file_name` originates from the camera's
+        directory listing, and interpolating it into a shell string meant a clip
+        named `x";rm -rf ~;"` would have been executed.
+        """
+        base_name = os.path.basename(file_name)
+        if base_name.lower().endswith('.mp4'):
+            base_name = base_name[:-4]
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_\-]{0,63}', base_name):
+            logger.warning(f"Refusing to generate thumbnail for unsafe name: {file_name!r}")
+            return
+
+        os.makedirs(self.thumbnail_path, exist_ok=True)
+        thumbnail_path = os.path.join(self.thumbnail_path, base_name + ".jpg")
+        command = [
+            "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
+            "-ss", "1", "-i", file_path,
+            "-vframes", "1", "-q:v", "2", thumbnail_path,
+        ]
+
         try:
             cwd = os.path.dirname(os.path.realpath(__file__))
-            subprocess.run(command, shell=True, check=True, cwd=cwd)
-            logger.info("Thumbnail generated successfully using ffmpeg.")
+            subprocess.run(command, check=True, cwd=cwd, timeout=60,
+                           stdin=subprocess.DEVNULL, capture_output=True)
+            logger.info(f"Thumbnail generated for {base_name}")
+        except subprocess.TimeoutExpired:
+            logger.error(f"Thumbnail generation timed out for {base_name}")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Error generating thumbnail: {e}")
-    
+            logger.error(f"Error generating thumbnail for {base_name}: {e.stderr.decode(errors='replace').strip()}")
+        except FileNotFoundError:
+            logger.error("ffmpeg not found; cannot generate thumbnails")
+
+
+    MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
+
+    def _fetch_one(self, file_url, file_path, cam=None):
+        """Download a single clip, resuming a partial `.part` file if present.
+
+        Returns the number of bytes written. Raises on failure; the caller
+        decides whether to retry. The partial file is deliberately *kept* on
+        failure so the next attempt resumes instead of starting over -- a clip
+        that died at 95% used to be thrown away and re-fetched from zero.
+        """
+        part_path = file_path + '.part'
+        resume_from = 0
+        if os.path.exists(part_path):
+            resume_from = os.path.getsize(part_path)
+
+        headers = {}
+        if resume_from:
+            headers['Range'] = f'bytes={resume_from}-'
+
+        base_url = cam.require_base_url() if cam else self.base_url
+        if not base_url:
+            raise CameraOffline("Camera is not connected")
+        self.base_url = base_url
+
+        url = base_url + file_url
+        timeout = (DOWNLOAD_TIMEOUT[0], self.read_timeout)
+        with _download_session.get(url, stream=True, timeout=timeout, headers=headers) as response:
+            if response.status_code == 416:
+                # Already have the whole file according to the camera.
+                logger.info(f"{file_url} already complete on disk")
+                total_bytes = resume_from
+            elif response.status_code == 206:
+                mode = 'ab'
+                total_bytes = resume_from + _to_int(response.headers.get('Content-Length'), 0)
+                logger.info(f"Resuming {file_url} at {resume_from / 1048576:.1f} MB")
+            elif response.status_code == 200:
+                # No range support (or a fresh start): rewrite from scratch.
+                if resume_from:
+                    logger.info(f"Camera ignored Range for {file_url}; restarting")
+                mode = 'wb'
+                resume_from = 0
+                total_bytes = _to_int(response.headers.get('Content-Length'), 0)
+            else:
+                raise Exception(f"Camera returned HTTP {response.status_code} for {file_url}")
+
+            if response.status_code != 416:
+                bytes_downloaded = resume_from
+                self.db.set_progress(file_url, bytes_downloaded, total_bytes)
+                last_report = time.monotonic()
+                with open(part_path, mode) as part_file:
+                    for chunk in response.iter_content(chunk_size=self.chunk_size):
+                        if not chunk:
+                            continue
+                        part_file.write(chunk)
+                        bytes_downloaded += len(chunk)
+                        # Report on a timer rather than a chunk count so the UI
+                        # updates at the same rate regardless of chunk size.
+                        now = time.monotonic()
+                        if now - last_report >= 1.0:
+                            self.db.set_progress(file_url, bytes_downloaded, total_bytes)
+                            last_report = now
+                self.db.set_progress(file_url, bytes_downloaded, total_bytes)
+
+                # A truncated transfer must not be renamed into place and
+                # marked downloaded -- that produced unplayable clips that were
+                # never retried.
+                if total_bytes and bytes_downloaded < total_bytes:
+                    raise IOError(
+                        f"Truncated download for {file_url}: "
+                        f"{bytes_downloaded} of {total_bytes} bytes"
+                    )
+
+        os.replace(part_path, file_path)
+        return os.path.getsize(file_path)
+
     def download_video(self, cam=None):
-        downloaded_files = self.db.load_downloaded_files()
-        # Get Queue from file
         file_urls = self.db.load_download_queue()
         if not file_urls:
             logger.info("No files to download... moving on!")
             return True
-        else:
-            if not os.path.exists(self.download_path):
-                os.makedirs(self.download_path)
-            try:
-                # If there is no base_url, easy enough to grab it from the camera
-                if not self.base_url:
-                    cam = Camera(self.config, check_connection=True)
-                    if not cam.connected:
-                        raise Exception("Camera is not connected, impossible to download")
-                    self.base_url = cam.base_url
-                
-                min_free_bytes = 1 * 1024 * 1024 * 1024  # 1 GB
-                free_bytes = shutil.disk_usage(self.download_path).free
-                if free_bytes < min_free_bytes:
-                    logger.error(f"Insufficient disk space: {free_bytes / 1024**3:.1f} GB free, need at least 1 GB. Skipping downloads.")
-                    return False
 
-                self.start_download_lock()
-                for file_url in file_urls:
-                    try:
-                        if cam and isinstance(cam, Camera):
-                            status = cam.check_camera_connection()
-                            if not status:
-                                raise Exception("Connection to camera has been lost")
-                            
-                        file_name = file_url.split('/')[-1]
-                        file_path = f'{self.download_path}/{file_name}'
-                        tmp_path = file_path + '.tmp'
+        os.makedirs(self.download_path, exist_ok=True)
 
-                        total_bytes = 0
-                        bytes_downloaded = 0
-                        try:
-                            with requests.get(self.base_url + file_url, stream=True, timeout=self.timeout) as response:
-                                if response.status_code == 200:
-                                    total_bytes = int(response.headers.get('Content-Length', 0))
-                                    chunk_count = 0
-                                    with open(tmp_path, "wb+") as tmp_file:
-                                        logger.info(f"Downloading from URL: {self.base_url}{file_url} to {tmp_path}")
-                                        for chunk in response.iter_content(chunk_size=2048):
-                                            if chunk:
-                                                tmp_file.write(chunk)
-                                                bytes_downloaded += len(chunk)
-                                                chunk_count += 1
-                                                if chunk_count % 1024 == 0:
-                                                    self.db.set_progress(file_url, bytes_downloaded, total_bytes)
-                                    os.rename(tmp_path, file_path)
-                                    logger.info(f"File successfully downloaded and moved to: {file_path}")
-                                else:
-                                    logger.error("Failed to download file {} Status: {}".format(file_url, response.status_code))
-                                    continue
-                        except Exception:
-                            if os.path.exists(tmp_path):
-                                os.remove(tmp_path)
-                            raise
+        try:
+            # Always take the current address from the camera object: caching it
+            # across reconnects meant every download failed after the camera
+            # moved between AP and home WiFi.
+            if cam and isinstance(cam, Camera):
+                self.base_url = cam.require_base_url()
+            elif not self.base_url:
+                cam = Camera(self.config, check_connection=True)
+                self.base_url = cam.require_base_url()
 
-                        # Append file to downloaded_files list, keep track of the downloads
-                        downloaded_files = self.db.load_downloaded_files()
-                        downloaded_files.append(file_url)
-                        self.db.save_downloaded_files(downloaded_files)
-                        downloaded_files = self.db.load_downloaded_files()
-
-                        # Remove from queue atomically
-                        self.db.remove_from_queue(file_url)
-                        self.db.clear_progress(file_url)
-                    except Exception as e:
-                        logger.info(f"Exception: {e} Skipping file: {file_url}")
-                # Save the updated downloaded_files list to downloads.json
-                self.stop_download_lock()
-                logger.info("Downloads complete!")
-                return True
-
-            except:
-                e = sys.exc_info()
-                logger.error(f"Exception while downloading: {e}")
+            free_bytes = shutil.disk_usage(self.download_path).free
+            if free_bytes < self.MIN_FREE_BYTES:
+                logger.error(
+                    f"Insufficient disk space: {free_bytes / 1024**3:.1f} GB free, "
+                    "need at least 1 GB. Skipping downloads."
+                )
                 return False
+
+            self.start_download_lock()
+            completed = 0
+            try:
+                with self._transfer_mode(cam):
+                    completed = self._drain_queue(file_urls, cam)
+            finally:
+                self.stop_download_lock()
+
+            logger.info(f"Downloads complete! {completed} clip(s) fetched.")
+            return self._last_drain_ok
+
+        except CameraOffline as e:
+            logger.warning(f"Cannot download: {e}")
+            return False
+        except Exception as e:
+            logger.exception(f"Exception while downloading: {e}")
+            return False
+
+    @contextlib.contextmanager
+    def _transfer_mode(self, cam):
+        """Hold the camera in playback mode for a batch, if enabled and possible."""
+        if cam and isinstance(cam, Camera) and self.use_playback_mode:
+            with cam.playback_mode():
+                yield
+        else:
+            yield
+
+    def _drain_queue(self, file_urls, cam):
+        """Download every queued clip. Returns the number successfully fetched.
+
+        Sets self._last_drain_ok False if the camera went away mid-queue, so the
+        caller knows the queue was abandoned rather than completed.
+        """
+        completed = 0
+        self._last_drain_ok = True
+        last_heartbeat = time.monotonic()
+
+        for file_url in file_urls:
+            # Keep the camera's session alive between files. A transfer is
+            # itself proof of life, so this only matters in the gaps.
+            if cam and isinstance(cam, Camera) and time.monotonic() - last_heartbeat > 5:
+                try:
+                    cam.heartbeat()
+                except Exception as e:
+                    logger.debug(f"Heartbeat failed: {e}")
+                last_heartbeat = time.monotonic()
+
+            if not is_safe_clip_url(file_url):
+                logger.warning(f"Dropping unsafe queue entry: {file_url!r}")
+                self.db.remove_from_queue(file_url)
+                continue
+
+            file_name = file_url.rsplit('/', 1)[-1]
+            try:
+                file_path = self.resolve_in_download_dir(file_name)
+            except ValueError as e:
+                logger.warning(f"{e}; dropping from queue")
+                self.db.remove_from_queue(file_url)
+                continue
+
+            if os.path.exists(file_path):
+                logger.info(f"{file_name} already on disk; marking done")
+                self.db.mark_downloaded(file_url)
+                self.db.remove_from_queue(file_url)
+                self.db.clear_progress(file_url)
+                continue
+
+            # Retry in place rather than abandoning the file. A skipped clip
+            # used to wait a full scrape_interval (15 min by default) before it
+            # was tried again, which is what turned four clips into an hour in
+            # the driveway.
+            for attempt in range(1, self.max_attempts + 1):
+                try:
+                    started = time.monotonic()
+                    size = self._fetch_one(file_url, file_path, cam=cam)
+                    elapsed = max(time.monotonic() - started, 0.001)
+                    logger.info(
+                        f"Downloaded {file_name} ({size / 1048576:.1f} MB "
+                        f"in {elapsed:.0f}s, {size / 1048576 / elapsed:.1f} MB/s)"
+                    )
+                    self.db.mark_downloaded(file_url)
+                    self.db.remove_from_queue(file_url)
+                    self.db.clear_progress(file_url)
+                    completed += 1
+                    break
+                except CameraOffline:
+                    logger.warning("Camera went away mid-queue; pausing downloads")
+                    self._last_drain_ok = False
+                    return completed
+                except Exception as e:
+                    if attempt >= self.max_attempts:
+                        logger.error(f"Giving up on {file_url} after {attempt} attempts: {e}")
+                        self.db.clear_progress(file_url)
+                        break
+                    backoff = 2 ** (attempt - 1)
+                    logger.warning(
+                        f"Attempt {attempt}/{self.max_attempts} for {file_name} "
+                        f"failed ({e}); retrying in {backoff}s"
+                    )
+                    time.sleep(backoff)
+                    # Re-probe so a genuinely dropped link is noticed here
+                    # rather than after three futile attempts.
+                    if cam and isinstance(cam, Camera) and not cam.check_camera_connection(force=True):
+                        logger.warning("Camera is no longer reachable; pausing downloads")
+                        self._last_drain_ok = False
+                        return completed
+
+        return completed
+
+
 class DownloadsDB:
+    # Schema setup and JSON migration only need to happen once per process, not
+    # on every instantiation -- the web routes build one of these per request.
+    _initialised = set()
+    _init_lock = threading.Lock()
+
     def __init__(self, config):
         if not isinstance(config, Config):
             raise Exception("Config is not of class Config")
         config_data = config.config_data
 
         self.db_path = f"{config_data['video_path']}/dashy.db"
-        self._init_db()
-        self._migrate_json(config_data['video_path'])
+        with DownloadsDB._init_lock:
+            if self.db_path not in DownloadsDB._initialised:
+                self._init_db()
+                self._migrate_json(config_data['video_path'])
+                DownloadsDB._initialised.add(self.db_path)
+
+    def _connect(self):
+        """Open a connection configured for concurrent use.
+
+        WAL plus a busy timeout keeps the downloader thread's progress writes
+        from colliding with the web threads' reads; the default configuration
+        raised "database is locked" under the UI's polling.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=15)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=15000")
+        return conn
+
+    @contextlib.contextmanager
+    def _db(self):
+        """Transactional connection that is always closed.
+
+        `with sqlite3.connect(...)` commits but does not close, so the previous
+        code leaked a file descriptor on every call -- and there is a call per
+        UI poll.
+        """
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        os.makedirs(os.path.dirname(self.db_path) or '.', exist_ok=True)
+        with self._db() as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS downloaded (url TEXT PRIMARY KEY)")
             conn.execute("CREATE TABLE IF NOT EXISTS queue (url TEXT PRIMARY KEY)")
             conn.execute("""
@@ -569,6 +1468,15 @@ class DownloadsDB:
                     updated_at TEXT
                 )
             """)
+
+    def clear_all_progress(self):
+        """Drop stale progress rows. Called once at startup.
+
+        This used to run inside _init_db, so every `DownloadsDB(config)` wiped
+        the table -- including the one built by /api/progress immediately before
+        reading it, which is why the download progress bar never appeared.
+        """
+        with self._db() as conn:
             conn.execute("DELETE FROM progress")
 
     def _migrate_json(self, video_path):
@@ -578,7 +1486,7 @@ class DownloadsDB:
         if os.path.exists(old_db_path):
             with open(old_db_path, 'r') as f:
                 urls = json.load(f)
-            with sqlite3.connect(self.db_path) as conn:
+            with self._db() as conn:
                 conn.executemany("INSERT OR IGNORE INTO downloaded (url) VALUES (?)", [(u,) for u in urls])
             os.rename(old_db_path, old_db_path + ".migrated")
             logger.info(f"Migrated {len(urls)} entries from downloads.json to SQLite")
@@ -586,30 +1494,39 @@ class DownloadsDB:
         if os.path.exists(old_queue_path):
             with open(old_queue_path, 'r') as f:
                 urls = json.load(f)
-            with sqlite3.connect(self.db_path) as conn:
+            with self._db() as conn:
                 conn.executemany("INSERT OR IGNORE INTO queue (url) VALUES (?)", [(u,) for u in urls])
             os.rename(old_queue_path, old_queue_path + ".migrated")
             logger.info(f"Migrated {len(urls)} entries from downloads_queue.json to SQLite")
 
     def load_downloaded_files(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             rows = conn.execute("SELECT url FROM downloaded").fetchall()
         return [r[0] for r in rows]
 
     def load_download_queue(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             rows = conn.execute("SELECT url FROM queue").fetchall()
         return [r[0] for r in rows]
 
     def save_downloaded_files(self, downloaded_files):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             conn.execute("DELETE FROM downloaded")
             conn.executemany("INSERT OR IGNORE INTO downloaded (url) VALUES (?)", [(u,) for u in downloaded_files])
 
     def save_download_queue(self, queue):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             conn.execute("DELETE FROM queue")
             conn.executemany("INSERT OR IGNORE INTO queue (url) VALUES (?)", [(u,) for u in queue])
+
+    def mark_downloaded(self, url):
+        """Record one completed download.
+
+        Replaces the old read-all / append / rewrite-the-whole-table dance,
+        which raced with anything else writing to the table.
+        """
+        with self._db() as conn:
+            conn.execute("INSERT OR IGNORE INTO downloaded (url) VALUES (?)", (url,))
 
     def append_download_queue(self, name):
         if not self.check_downloaded(name):
@@ -617,37 +1534,37 @@ class DownloadsDB:
                 logger.warning("Video already in queue")
             else:
                 logger.info(f"Appending file {name} to downloads queue...")
-                with sqlite3.connect(self.db_path) as conn:
+                with self._db() as conn:
                     conn.execute("INSERT OR IGNORE INTO queue (url) VALUES (?)", (name,))
 
     def queue_length(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             row = conn.execute("SELECT COUNT(*) FROM queue").fetchone()
         return row[0]
 
     def check_downloaded(self, file):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             row = conn.execute("SELECT 1 FROM downloaded WHERE url = ?", (file,)).fetchone()
         return row is not None
 
     def check_downloads_queue(self, name):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             row = conn.execute("SELECT 1 FROM queue WHERE url = ?", (name,)).fetchone()
         return row is not None
 
     def remove_from_queue(self, url):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             conn.execute("DELETE FROM queue WHERE url = ?", (url,))
 
     def set_progress(self, url, bytes_downloaded, total_bytes):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO progress (url, bytes_downloaded, total_bytes, updated_at)
                 VALUES (?, ?, ?, datetime('now'))
             """, (url, bytes_downloaded, total_bytes))
 
     def get_progress(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             row = conn.execute("""
                 SELECT url, bytes_downloaded, total_bytes, updated_at
                 FROM progress
@@ -658,10 +1575,10 @@ class DownloadsDB:
         return None
 
     def clear_progress(self, url):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             conn.execute("DELETE FROM progress WHERE url = ?", (url,))
 
     def remove_downloaded(self, filename):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._db() as conn:
             conn.execute("DELETE FROM downloaded WHERE url LIKE ?", (f'%/{filename}',))
 
