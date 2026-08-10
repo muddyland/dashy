@@ -109,7 +109,34 @@ $(document).ready(function() {
         return n + ' ' + (n === 1 ? one : many);
     }
 
-    function appendQueueActions() {
+    function appendQueueActions(downloadActive) {
+        if (downloadActive) {
+            var $stop = $('<a class="dropdown-item small" href="#">')
+                .css('color', '#e57373')
+                .append($('<i class="fas fa-stop-circle">'), ' Stop downloading')
+                .on('click', function(e) {
+                    e.preventDefault();
+                    queueAction('/api/downloads/stop', function(res) {
+                        if (!res.stopped) {
+                            dashyModal.notify({title: 'Nothing to stop', body: res.reason});
+                            return;
+                        }
+                        var mins = Math.round(res.resumes_in_seconds / 60);
+                        dashyModal.notify({
+                            title: 'Download stopped',
+                            body: 'The transfer was interrupted. Nothing is lost — the ' +
+                                  'partly downloaded clip is kept and resumes where it left off.',
+                            note: 'Downloading resumes in about ' +
+                                  (mins >= 1 ? mins + ' minute' + (mins === 1 ? '' : 's')
+                                             : res.resumes_in_seconds + ' seconds') + '.'
+                        });
+                    });
+                });
+            $('#queue-dropdown')
+                .append($('<li><hr class="dropdown-divider" style="border-color:#21262d;"></li>'))
+                .append($('<li>').append($stop));
+        }
+
         var $prune = $('<a class="dropdown-item small" href="#">')
             .css('color', '#00b4d8')
             .append($('<i class="fas fa-broom">'), ' Remove clips no longer on camera')
@@ -204,7 +231,7 @@ $(document).ready(function() {
             }
 
             if (totalCount > 0) {
-                appendQueueActions();
+                appendQueueActions(progress.active);
             }
 
             if (pendingQueue.length > 0) {

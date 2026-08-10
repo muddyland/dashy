@@ -16,6 +16,7 @@
     "download_chunk_size": 262144,
     "download_attempts": 3,
     "playback_mode_for_downloads": true,
+    "delete_after_download": true,
 
     "auth_username": "",
     "auth_password": ""

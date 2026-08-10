@@ -62,6 +62,7 @@ docker run -d \
 | `DOWNLOAD_CHUNK_SIZE` | `262144` | Bytes per read. Above ~64 KiB throughput is flat; the size mainly bounds how much is re-fetched after a dropped connection |
 | `DOWNLOAD_ATTEMPTS` | `3` | Attempts per clip before moving on. Interrupted clips resume, they don't restart |
 | `PLAYBACK_MODE_FOR_DOWNLOADS` | `true` | Put the camera in playback mode while downloading — much faster, but it stops recording for the duration. See [Playback mode](#playback-mode-while-downloading) |
+| `DELETE_AFTER_DOWNLOAD` | `true` | Delete each clip from the camera once it has downloaded successfully. See [Deleting clips](#deleting-clips-from-the-camera) |
 | `DASHY_THREADS` | `8` | Worker threads. Must stay above 1 or an open live view blocks the whole UI |
 | `DASHY_USERNAME` | _(unset)_ | Enable HTTP basic auth (with `DASHY_PASSWORD`). See [Security](#security) |
 | `DASHY_PASSWORD` | _(unset)_ | Password for basic auth. Auth is off unless both are set |
@@ -131,6 +132,7 @@ Tested on Debian Buster and Bookworm. Requires a wired LAN connection — the Pi
    | `download_chunk_size` | `262144` | Bytes per read |
    | `download_attempts` | `3` | Attempts per clip before moving on |
    | `playback_mode_for_downloads` | `true` | Switch to playback mode while downloading — see [Playback mode](#playback-mode-while-downloading) |
+   | `delete_after_download` | `true` | Delete clips from the camera once downloaded — see [Deleting clips](#deleting-clips-from-the-camera) |
    | `retention_enabled` / `retention_days` | `true` / `180` | Auto-delete old clips |
    | `auth_username` / `auth_password` | _(empty)_ | Enable HTTP basic auth — see [Security](#security) |
 
@@ -166,6 +168,34 @@ To keep the camera recording throughout, at the cost of slower and less reliable
 ```
 
 `dashy_diag.py` measures the difference on your specific camera and tells you whether it's worth it.
+
+---
+
+## Deleting clips from the camera
+
+Once a clip has downloaded successfully, Dashy deletes it from the camera so the card doesn't fill up. **This is on by default.** To keep clips on the camera:
+
+```bash
+-e DELETE_AFTER_DOWNLOAD=false
+```
+
+A clip is only ever deleted when its transfer completed *and* the size matched what the camera advertised — a partial, truncated or interrupted download never triggers a delete, and neither does a missing or empty local file. If the delete fails, it's logged and the clip is simply skipped next cycle.
+
+> **This makes Dashy's copy the only copy.** Combined with `RETENTION_DAYS`, a clip is gone for good once retention deletes it locally. If the storage path isn't backed up, consider `DELETE_AFTER_DOWNLOAD=false` or `RETENTION_ENABLED=false`.
+
+---
+
+## Interrupting a download
+
+Downloads can be stopped from the **Queue** dropdown in the navbar, or:
+
+```bash
+curl -X POST http://<dashy>/api/downloads/stop
+```
+
+Nothing is lost. The partly-downloaded clip is kept and stays queued, so when downloading resumes it picks up from where it stopped rather than starting the clip over. The camera is returned to recording mode immediately.
+
+Downloading resumes after the normal `SCRAPE_INTERVAL` — it doesn't restart straight away, which would simply undo the interruption. That interval is also the window in which camera settings are unlocked, so stopping a download is the way to change settings without waiting for a long queue to finish.
 
 ---
 

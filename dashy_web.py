@@ -243,6 +243,19 @@ def downloader_loop():
                 finally:
                     download_event.clear()
 
+            if downloads.was_cancelled():
+                # Interrupted on request. Don't loop straight back round, that
+                # would just restart what was cancelled; wait out the normal
+                # interval and resume then. Partial files are kept, so the
+                # resumed transfer picks up where it stopped.
+                remaining = db.queue_length()
+                logger.info(
+                    f"Download interrupted. {remaining} clip(s) still queued; "
+                    f"resuming in {scrape_interval}s."
+                )
+                sleep_until_disconnected(scrape_interval)
+                continue
+
             if queue_len_before:
                 fire_ha_webhook(queue_len_before)
 
@@ -422,6 +435,24 @@ def api_queue():
         return jsonify({"queue": db.load_download_queue()})
     except:
         return jsonify({"queue": []})
+
+@app.route('/api/downloads/stop', methods=['POST'])
+def api_downloads_stop():
+    """Interrupt the transfer in progress.
+
+    Nothing is lost: the partially downloaded file is kept and the clip stays
+    queued, so the next cycle resumes from where it stopped rather than
+    starting the clip over. Downloading resumes after the normal interval.
+    """
+    if not download_event.is_set():
+        return jsonify({"stopped": False, "reason": "No download in progress"})
+    downloads.request_stop()
+    logger.info("Download stop requested")
+    return jsonify({
+        "stopped": True,
+        "resumes_in_seconds": int(config_json.get('scrape_interval', 900)),
+    })
+
 
 @app.route('/api/queue/prune', methods=['POST'])
 def api_queue_prune():

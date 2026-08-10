@@ -52,6 +52,10 @@ download_attempts = int(os.environ.get('DOWNLOAD_ATTEMPTS', 3))
 # at the same time -- but it does stop recording for the duration. Recording is
 # always restored afterwards. Set false to keep the camera recording throughout.
 playback_mode_for_downloads = os.environ.get('PLAYBACK_MODE_FOR_DOWNLOADS', 'true').lower() != 'false'
+# Delete each clip from the camera once it has downloaded successfully, so the
+# card doesn't fill up. Only ever applied to a completed transfer whose size
+# matched what the camera advertised. Set false to leave clips on the camera.
+delete_after_download = os.environ.get('DELETE_AFTER_DOWNLOAD', 'true').lower() != 'false'
 # Retention - set RETENTION_ENABLED=false to keep all clips forever
 retention_enabled = os.environ.get('RETENTION_ENABLED', 'true').lower() != 'false'
 # Retention days - clips older than this will be deleted (default: 180 = 6 months)
@@ -112,6 +116,7 @@ if __name__ == "__main__":
             "download_chunk_size": download_chunk_size,
             "download_attempts": download_attempts,
             "playback_mode_for_downloads": playback_mode_for_downloads,
+            "delete_after_download": delete_after_download,
             "retention_enabled": retention_enabled,
             "retention_days": retention_days,
             "ha_webhook_url": ha_webhook_url

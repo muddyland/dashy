@@ -285,6 +285,14 @@ class ClipGone(Exception):
     """
 
 
+class DownloadCancelled(Exception):
+    """Raised when a transfer is interrupted by request.
+
+    Not an error: the partial file is kept and the queue is left intact, so the
+    next cycle resumes from where it stopped.
+    """
+
+
 def classify_lens(name):
     """Which camera a clip came from.
 
@@ -1049,6 +1057,51 @@ class Camera:
                 result[key] = {"rval": -1, "error": str(e)}
         return result
 
+    def delete_file(self, url_path):
+        """Delete one clip from the camera's card.
+
+        `url_path` is the web path, e.g. /DCIM/Movie/RO/2025_..._47F.MP4.
+        Returns True only if the camera confirmed the deletion.
+
+        Two mechanisms, because firmware varies: the delete command with the
+        file path as a string, then the `?del=1` form used by the camera's own
+        directory listing.
+        """
+        if not is_safe_clip_url(url_path):
+            logger.warning(f"Refusing to delete unexpected path: {url_path!r}")
+            return False
+
+        try:
+            result = self._request({
+                "custom": 1,
+                "cmd": _CMD_CONTROL["DELETE_ONE_FILE"],
+                "str": url_path,
+            })
+            if _to_int(result.get('rval'), -1) == 0:
+                return True
+            logger.debug(f"Delete cmd for {url_path} returned rval={result.get('rval')}")
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.debug(f"Delete cmd for {url_path} failed: {e}")
+
+        # Fallback: the delete link the directory index itself uses.
+        try:
+            base_url = self.require_base_url()
+            with _CONTROL_LOCK:
+                response = _control_session.get(
+                    base_url + url_path, params={"del": 1}, timeout=CONTROL_TIMEOUT
+                )
+            if response.status_code == 200:
+                return True
+            logger.debug(f"del=1 for {url_path} returned HTTP {response.status_code}")
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.debug(f"del=1 for {url_path} failed: {e}")
+
+        return False
+
     def read_all_settings(self):
         """Read every setting for this model.
 
@@ -1150,6 +1203,32 @@ class Downloads:
         # to keep the camera recording throughout.
         self.use_playback_mode = bool(config_data.get('playback_mode_for_downloads', True))
         self._last_drain_ok = True
+        # Set to interrupt a transfer in progress. The partial file is kept, so
+        # the next cycle resumes rather than starting the clip again.
+        self.cancel_event = threading.Event()
+        self._cancelled = False
+        # Delete each clip from the camera once it is safely downloaded, to stop
+        # the card filling up. Only ever applied to a transfer that completed
+        # and matched the size the camera advertised -- a partial or truncated
+        # download never triggers a delete.
+        self.delete_after_download = bool(config_data.get('delete_after_download', True))
+
+    def request_stop(self):
+        """Interrupt the download in progress, if any."""
+        self.cancel_event.set()
+
+    def was_cancelled(self):
+        """True if the last run stopped because it was interrupted."""
+        return self._cancelled
+
+    def _check_cancelled(self):
+        if self.cancel_event.is_set():
+            raise DownloadCancelled("Download interrupted by request")
+
+    def _interruptible_sleep(self, seconds):
+        """Sleep, but wake immediately if a stop is requested."""
+        if self.cancel_event.wait(timeout=seconds):
+            raise DownloadCancelled("Download interrupted by request")
 
     def resolve_in_download_dir(self, file_name):
         """Join `file_name` to the download directory, refusing to escape it."""
@@ -1263,6 +1342,11 @@ class Downloads:
                     for chunk in response.iter_content(chunk_size=self.chunk_size):
                         if not chunk:
                             continue
+                        # Checked every chunk so a stop takes effect within a
+                        # fraction of a second, not at the end of the file.
+                        # Leaving the loop keeps everything written so far;
+                        # the next attempt resumes from there.
+                        self._check_cancelled()
                         part_file.write(chunk)
                         bytes_downloaded += len(chunk)
                         # Report on a timer rather than a chunk count so the UI
@@ -1286,6 +1370,10 @@ class Downloads:
         return os.path.getsize(file_path)
 
     def download_video(self, cam=None):
+        # A stop applies to the run it interrupted, so start each run clean.
+        self.cancel_event.clear()
+        self._cancelled = False
+
         file_urls = self.db.load_download_queue()
         if not file_urls:
             logger.info("No files to download... moving on!")
@@ -1316,6 +1404,14 @@ class Downloads:
             try:
                 with self._transfer_mode(cam):
                     completed = self._drain_queue(file_urls, cam)
+            except DownloadCancelled:
+                # Requested stop, not a failure. Partial files and queue entries
+                # are left as they are so the next cycle resumes.
+                self._cancelled = True
+                logger.info(
+                    f"Download interrupted after {self._completed} clip(s); progress kept"
+                )
+                return False
             finally:
                 self.stop_download_lock()
 
@@ -1337,6 +1433,40 @@ class Downloads:
                 yield
         else:
             yield
+
+    def _delete_from_camera(self, file_url, file_path, cam):
+        """Remove a clip from the camera once it is safely on disk.
+
+        Deliberately paranoid: this destroys the only other copy of the
+        footage, so it only runs when the local file exists and is non-empty.
+        _fetch_one has already rejected any transfer shorter than the length
+        the camera advertised, so reaching here means the clip is complete.
+        A failed delete is logged and otherwise ignored -- the clip is
+        downloaded either way, and it will simply be skipped next cycle.
+        """
+        if not self.delete_after_download or not cam or not isinstance(cam, Camera):
+            return False
+
+        try:
+            if not os.path.isfile(file_path) or os.path.getsize(file_path) == 0:
+                logger.warning(
+                    f"Not deleting {file_url} from the camera: local copy is missing or empty"
+                )
+                return False
+        except OSError as e:
+            logger.warning(f"Not deleting {file_url} from the camera: {e}")
+            return False
+
+        try:
+            if cam.delete_file(file_url):
+                logger.info(f"Deleted {file_url.rsplit('/', 1)[-1]} from the camera")
+                return True
+            logger.warning(f"Camera did not confirm deletion of {file_url}")
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not delete {file_url} from the camera: {e}")
+        return False
 
     def prune_missing(self, cam):
         """Drop queue entries for clips the camera no longer has.
@@ -1382,11 +1512,15 @@ class Downloads:
         caller knows the queue was abandoned rather than completed.
         """
         completed = 0
+        self._completed = 0
         self._last_drain_ok = True
         self._removed_missing = 0
         last_heartbeat = time.monotonic()
 
         for file_url in file_urls:
+            # Between files as well as during them, so a stop requested while
+            # the queue is long takes effect at once.
+            self._check_cancelled()
             # Keep the camera's session alive between files. A transfer is
             # itself proof of life, so this only matters in the gaps.
             if cam and isinstance(cam, Camera) and time.monotonic() - last_heartbeat > 5:
@@ -1433,7 +1567,14 @@ class Downloads:
                     self.db.remove_from_queue(file_url)
                     self.db.clear_progress(file_url)
                     completed += 1
+                    self._completed = completed
+                    self._delete_from_camera(file_url, file_path, cam)
                     break
+                except DownloadCancelled:
+                    # Propagate: the partial file stays on disk and the clip
+                    # stays queued, so the next cycle picks up where this left
+                    # off.
+                    raise
                 except ClipGone:
                     # Don't retry and don't keep it queued -- the clip does not
                     # exist any more. Left in place these accumulate forever and
@@ -1457,7 +1598,7 @@ class Downloads:
                         f"Attempt {attempt}/{self.max_attempts} for {file_name} "
                         f"failed ({e}); retrying in {backoff}s"
                     )
-                    time.sleep(backoff)
+                    self._interruptible_sleep(backoff)
                     # Re-probe so a genuinely dropped link is noticed here
                     # rather than after three futile attempts.
                     if cam and isinstance(cam, Camera) and not cam.check_camera_connection(force=True):

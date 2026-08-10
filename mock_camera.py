@@ -115,6 +115,9 @@ def movie_parking_locked():
 def serve_file(filename):
     if not filename.endswith('.MP4'):
         return 'Not found', 404
+    # ?del=1 is the delete link the camera's own directory index uses.
+    if request.args.get('del') == '1':
+        return 'OK' if _delete_clip(filename) else ('Not found', 404)
     # 404 for anything not in the listing, like a real camera does once loop
     # recording has overwritten a clip. Serving every plausible name would hide
     # the queue's handling of files that no longer exist.
@@ -196,6 +199,15 @@ ACCEPT_PARAM_0 = False
 
 _mock_mode = 1  # 1 = video/record, 2 = playback
 
+
+def _delete_clip(filename):
+    """Remove a clip from the mock card. True if it was there."""
+    for names in CLIPS.values():
+        if filename in names:
+            names.remove(filename)
+            return True
+    return False
+
 # Set false to emulate firmware without the cmd 3015 file list, so the
 # HTML directory-scraping fallback gets exercised.
 SUPPORT_FILE_LIST = True
@@ -238,6 +250,9 @@ def index_or_api():
 
     if value is not None:
         # SET / ACTION
+        if cmd == 4003:                       # DELETE_ONE_FILE, path in &str=
+            name = str(value).replace('\\', '/').rsplit('/', 1)[-1]
+            return _reply(cmd, 0 if _delete_clip(name) else -14)
         if cmd == 3001:                       # CHANGE_MODE
             _mock_mode = int(value)
             return _reply(cmd, 0)
