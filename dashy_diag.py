@@ -29,7 +29,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from viofo import (  # noqa: E402
-    Camera, _CMD_CONTROL, _parse_camera_response, _new_session,
+    Camera, _CMD_CONTROL, _parse_camera_response, _parse_all_settings, _new_session,
 )
 from dashy_config import Config  # noqa: E402
 
@@ -246,7 +246,7 @@ def test_commands(base_url):
             sample = list(bulk.items())[:6]
             print(f"    Sample cmd->value: {sample}")
         else:
-            print(f"    No bulk table; Dashy will read settings individually.")
+            print("    No bulk table; Dashy will read settings individually.")
             print(f"    Body: {r.text.strip()[:200]!r}")
 
         # Which parameter name does this firmware accept for writes? Probed
@@ -272,6 +272,91 @@ def test_commands(base_url):
             break
         else:
             print("    Could not read a settable value to probe with.")
+    except requests.RequestException as e:
+        print(f"  Failed: {e}")
+    finally:
+        session.close()
+
+
+def test_live_view(base_url):
+    """Find out whether live view can work on this camera, and how."""
+    header("Live view")
+    session = _new_session()
+    try:
+        print("  Starting the stream (cmd 2015 par=1):")
+        r = session.get(base_url + "/", params={"custom": 1, "cmd": 2015, "par": 1}, timeout=(3, 15))
+        started = _parse_camera_response(r)
+        print(f"    rval={started.get('rval')}  {r.text.strip()[:120]!r}")
+
+        print("\n  Asking where the stream is (cmd 2019):")
+        r = session.get(base_url + "/", params={"custom": 1, "cmd": 2019}, timeout=(3, 15))
+        print(f"    {r.text.strip()[:250]!r}")
+
+        import re as _re
+        url = None
+        for tag in ('MovieLiveViewLink', 'PhotoLiveViewLink'):
+            m = _re.search(rf'<{tag}>(.*?)</{tag}>', r.text, _re.I | _re.S)
+            if m and m.group(1).strip():
+                url = m.group(1).strip()
+                print(f"    -> {tag}: {url}")
+        if not url:
+            url = base_url.rsplit(':', 1)[0] + ':8192'
+            print(f"    No URL reported; falling back to {url}")
+
+        if url.lower().startswith('rtsp://'):
+            print("\n  This camera streams RTSP. A browser cannot show that directly;")
+            print("  Dashy reports this rather than showing a blank player.")
+        else:
+            print(f"\n  Connecting to {url} ...")
+            try:
+                probe = requests.get(url, stream=True, timeout=(3, 10))
+                print(f"    HTTP {probe.status_code}, Content-Type: {probe.headers.get('Content-Type')}")
+                chunk = next(probe.iter_content(chunk_size=64), b'')
+                print(f"    first bytes: {chunk[:32]!r}")
+                probe.close()
+                print("    Live view should work.")
+            except Exception as e:
+                print(f"    Failed: {e}")
+                print("    Live view will not work until this endpoint serves data.")
+    except requests.RequestException as e:
+        print(f"  Failed: {e}")
+    finally:
+        try:
+            session.get(base_url + "/", params={"custom": 1, "cmd": 2015, "par": 0}, timeout=(3, 10))
+        except Exception:
+            pass
+        session.close()
+
+
+def test_settings_speed(base_url):
+    """How long does reading the settings actually take on this camera?"""
+    header("Settings read")
+    session = _new_session()
+    try:
+        r = session.get(base_url + "/", params={"custom": 1, "cmd": 3014}, timeout=(3, 30))
+        bulk = _parse_all_settings(r.text)
+        if bulk:
+            print(f"  Bulk query (cmd 3014) works: {len(bulk)} settings in one request.")
+            print("  The settings page loads in a single round trip.")
+            return
+        print("  Bulk query (cmd 3014) is not supported by this camera.")
+        print(f"    Raw reply: {r.text.strip()[:200]!r}")
+        print("  Settings must be read one command at a time. Timing three of them:")
+        total = 0.0
+        for cmd in (2002, 2003, 2007):
+            started = time.monotonic()
+            try:
+                session.get(base_url + "/", params={"custom": 1, "cmd": cmd}, timeout=(3, 15))
+                elapsed = time.monotonic() - started
+                total += elapsed
+                print(f"    cmd {cmd}: {elapsed:.2f}s")
+            except requests.RequestException as e:
+                print(f"    cmd {cmd}: failed ({e})")
+        if total:
+            each = total / 3
+            print(f"\n    ~{each:.2f}s each, so ~40 settings would take ~{each * 40:.0f}s.")
+            print("    Dashy caps this at 25s and reports how much it managed to read,")
+            print("    rather than leaving the page loading indefinitely.")
     except requests.RequestException as e:
         print(f"  Failed: {e}")
     finally:
@@ -373,6 +458,8 @@ def main():
 
     test_link(ip)
     test_commands(base_url)
+    test_settings_speed(base_url)
+    test_live_view(base_url)
     test_range(base_url, clip)
     test_keepalive(base_url, clip)
     test_throughput(base_url, clip, args.seconds)

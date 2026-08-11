@@ -22,7 +22,10 @@ This project uses AI (Claude) as a development tool to help get work done faster
 |---|---|
 | Viofo A229-Plus | Fully supported (default) |
 | Viofo A129-Plus Duo | Fully supported |
-| Other Viofo models | May work — filename parsing is model-specific |
+| Other A229 variants (A229S, A229 Pro, …) | Use the A229 command set — set `CAM_MODEL` to the name on the camera |
+| Other Viofo models | Fall back to the A229 command set; settings the camera lacks report an error individually |
+
+`CAM_MODEL` is matched on family, so `A229S`, `A229 Pro` and `A229-Plus` all resolve to the A229 command set. Clip metadata is read from the camera where supported, so timestamps don't depend on recognising the filename format.
 
 ---
 

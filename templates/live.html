@@ -23,14 +23,19 @@
         <img id="mjpeg-stream"
              src="/cam/mjpeg_stream"
              style="max-width:100%; width:100%; display:block;"
-             onerror="this.style.display='none'; document.getElementById('stream-error').style.display='flex';">
+             onerror="streamFailed()">
         {% endif %}
         <div id="stream-error"
              style="display:{% if cam_status != 'connected' %}flex{% else %}none{% endif %};
                     flex-direction:column; align-items:center; padding:3rem; color:#484f58;">
             <i class="fas fa-video-slash" style="font-size:3rem; margin-bottom:1rem;"></i>
             <span>Stream unavailable</span>
-            <small class="mt-1">MJPEG not available — try the RTSP proxy via the camera link above</small>
+            <small class="mt-1 text-center" id="stream-error-detail" style="max-width:32rem;">
+                Checking why…
+            </small>
+            <button class="btn btn-sm btn-outline-secondary mt-3" onclick="retryStream()">
+                <i class="fas fa-redo"></i> Retry
+            </button>
         </div>
     </div>
 </div>
@@ -80,6 +85,37 @@
 
 {% if cam_status == 'connected' %}
 <script>
+// An <img> that fails gives no reason, so ask the endpoint directly and show
+// what it says. "Stream unavailable" with no explanation was the whole problem.
+function streamFailed() {
+    var img = document.getElementById('mjpeg-stream');
+    if (img) img.style.display = 'none';
+    document.getElementById('stream-error').style.display = 'flex';
+    var detail = document.getElementById('stream-error-detail');
+    detail.textContent = 'Checking why…';
+
+    fetch('/cam/mjpeg_stream')
+        .then(function(r) {
+            if (r.ok) {
+                detail.textContent = 'The stream is available but the browser could not display it.';
+                return;
+            }
+            return r.text().then(function(t) {
+                detail.textContent = t || ('The camera returned HTTP ' + r.status + '.');
+            });
+        })
+        .catch(function(e) { detail.textContent = 'Could not reach Dashy: ' + e; });
+}
+
+function retryStream() {
+    var img = document.getElementById('mjpeg-stream');
+    document.getElementById('stream-error').style.display = 'none';
+    if (img) {
+        img.style.display = 'block';
+        img.src = '/cam/mjpeg_stream?t=' + Date.now();
+    }
+}
+
 // Recording controls are refused server-side during a download -- the camera is
 // held in playback mode for the transfer. Lock them in the UI to match.
 var camLocked = false;

@@ -27,6 +27,17 @@
     the camera is in playback mode and changing its WiFi settings now would interrupt the transfer.
 </div>
 
+<div id="settings-error" class="alert d-flex align-items-start justify-content-between"
+     style="display:none; background:#21262d; border:1px solid #e57373; color:#e57373;">
+    <div>
+        <i class="fas fa-exclamation-triangle"></i> <span id="settings-error-msg"></span>
+        <div id="settings-error-detail" class="small mt-1" style="color:#484f58; display:none;"></div>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary ms-3 flex-shrink-0" onclick="loadSettings()">
+        <i class="fas fa-redo"></i> Retry
+    </button>
+</div>
+
 <div id="settings-toast" class="position-fixed bottom-0 end-0 p-3" style="z-index:9999; display:none;">
     <div class="toast show" role="alert" id="toast-inner" style="background:#21262d; border:1px solid #30363d;">
         <div class="toast-body" id="toast-msg" style="color:#c9d1d9;"></div>
@@ -89,6 +100,7 @@ function renderControl(cmd, data) {
     if (!container) return;
 
     container.textContent = '';
+    container.dataset.filled = '1';
 
     if (!data || data.error) {
         var err = document.createElement('span');
@@ -199,24 +211,84 @@ function saveSetting(cmd, value) {
 // One request for the whole page. Firing ~40 parallel fetches (one per setting)
 // overwhelmed the camera's HTTP server, which would start refusing connections
 // part-way through and sometimes drop the WiFi link entirely.
-fetch('/api/cam/settings/all')
-.then(function(r) { return r.json(); })
-.then(function(payload) {
-    if (payload.error) {
-        showToast(payload.error, false);
-        return;
-    }
-    var settings = payload.settings || {};
-    Object.keys(settings).forEach(function(cmd) {
-        renderControl(cmd, settings[cmd]);
-    });
-})
-.catch(function() {
+//
+// Every control must end up showing something. A control left spinning is
+// indistinguishable from a hung page, so anything not returned is explicitly
+// marked unavailable and the reason is shown at the top with a Retry.
+
+function markRemaining(text) {
     document.querySelectorAll('.setting-control').forEach(function(c) {
-        c.textContent = 'failed';
+        if (c.dataset.filled) return;
+        c.textContent = text;
         c.className = 'setting-control text-muted small';
     });
-});
+}
+
+function showLoadError(message, detail) {
+    var box = document.getElementById('settings-error');
+    document.getElementById('settings-error-msg').textContent = message;
+    var d = document.getElementById('settings-error-detail');
+    d.textContent = detail || '';
+    d.style.display = detail ? '' : 'none';
+    box.style.display = '';
+}
+
+function loadSettings() {
+    document.getElementById('settings-error').style.display = 'none';
+    document.querySelectorAll('.setting-control').forEach(function(c) {
+        delete c.dataset.filled;
+        c.innerHTML = '<span class="text-muted small"><i class="fas fa-spinner fa-spin"></i> loading…</span>';
+    });
+
+    // The camera can be slow enough that the request outlives the page's
+    // usefulness; give up rather than spinning indefinitely.
+    var timedOut = false;
+    var timer = setTimeout(function() {
+        timedOut = true;
+        markRemaining('unavailable');
+        showLoadError('The camera did not respond in time.',
+                      'It may be busy. Try again, or check Dashy\'s logs.');
+    }, 45000);
+
+    fetch('/api/cam/settings/all')
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+        if (timedOut) return;
+        clearTimeout(timer);
+
+        if (!res.ok || res.data.error) {
+            markRemaining('unavailable');
+            showLoadError(res.data.error || 'Could not read settings from the camera.');
+            return;
+        }
+
+        var settings = res.data.settings || {};
+        var info = res.data.info || {};
+        Object.keys(settings).forEach(function(cmd) { renderControl(cmd, settings[cmd]); });
+
+        if (!Object.keys(settings).length) {
+            markRemaining('unavailable');
+            showLoadError('The camera returned no settings.',
+                          'This model may not support the settings API. ' +
+                          'Check /api/cam/raw?cmd=3014 to see its raw reply.');
+        } else if (info.complete === false) {
+            markRemaining('unavailable');
+            showLoadError('Only some settings could be read (' + info.read + ' of ' +
+                          (info.read + (info.skipped || 0)) + ').',
+                          'The camera is responding slowly. Retry to read the rest.');
+        } else {
+            markRemaining('unavailable');
+        }
+    })
+    .catch(function(e) {
+        if (timedOut) return;
+        clearTimeout(timer);
+        markRemaining('unavailable');
+        showLoadError('Could not reach Dashy.', String(e));
+    });
+}
+
+loadSettings();
 {% endif %}
 </script>
 {% endblock %}

@@ -616,21 +616,52 @@ def cam_live():
 
 @app.route('/cam/mjpeg_stream')
 def mjpeg_stream():
+    """Proxy the camera's live stream.
+
+    The camera has to be told to start streaming first -- connecting to the
+    stream port without doing so gets nothing, which is why live view appeared
+    dead. The stream is stopped again when the viewer disconnects.
+    """
     if not cam_status.connected:
         return "Camera not connected", 503
+    if downloading():
+        return "A download is in progress; live view is unavailable until it finishes", 409
+
+    cam.start_live_view()
+    url = cam.live_view_url()
+
+    if url and url.lower().startswith('rtsp://'):
+        # Can't hand RTSP to an <img>. Say so plainly rather than failing.
+        cam.stop_live_view()
+        logger.info(f"Camera offers RTSP live view at {url}")
+        return (f"This camera streams over RTSP ({url}), which the browser cannot "
+                f"display directly. Open it in a player such as VLC."), 501
+
     try:
-        r = http_requests.get(cam.mjpeg_url, stream=True, timeout=30)
-        content_type = r.headers.get('Content-Type', 'multipart/x-mixed-replace; boundary=myboundary')
-        def generate():
-            try:
-                for chunk in r.iter_content(chunk_size=4096):
-                    if chunk:
-                        yield chunk
-            finally:
-                r.close()
-        return Response(generate(), content_type=content_type)
+        r = http_requests.get(url, stream=True, timeout=(3.05, 30))
     except Exception as e:
-        return str(e), 502
+        cam.stop_live_view()
+        logger.warning(f"Live view connection to {url} failed: {e}")
+        return f"Could not open the live stream at {url}: {e}", 502
+
+    if r.status_code != 200:
+        r.close()
+        cam.stop_live_view()
+        return f"Camera returned HTTP {r.status_code} for the live stream at {url}", 502
+
+    content_type = r.headers.get('Content-Type', 'multipart/x-mixed-replace; boundary=myboundary')
+
+    def generate():
+        try:
+            for chunk in r.iter_content(chunk_size=4096):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
+            # Leaving the stream running keeps the camera encoding for nobody.
+            cam.stop_live_view()
+
+    return Response(generate(), content_type=content_type)
 
 
 @app.route('/api/cam/info')
@@ -743,11 +774,13 @@ def api_cam_settings_all():
     (and sometimes the WiFi link with it).
     """
     try:
-        return jsonify({"settings": cam.read_all_settings()})
+        values, info = cam.read_all_settings()
+        return jsonify({"settings": values, "info": info})
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Settings read failed: {e}")
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route('/api/cam/raw')

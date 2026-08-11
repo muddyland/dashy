@@ -212,6 +212,16 @@ def _delete_clip(filename):
 # HTML directory-scraping fallback gets exercised.
 SUPPORT_FILE_LIST = True
 
+# Emulate firmware whose bulk settings query (cmd 3014) isn't supported, so the
+# per-command fallback path gets exercised.
+SUPPORT_BULK_SETTINGS = True
+
+# Emulate a camera that streams over RTSP rather than MJPEG over HTTP.
+LIVE_VIEW_RTSP = False
+
+# Live view only serves frames once it has been started with cmd 2015.
+_live_view_on = False
+
 
 def _xml(**fields):
     body = "".join(f"<{k}>{v}</{k}>" for k, v in fields.items())
@@ -253,6 +263,9 @@ def index_or_api():
         if cmd == 4003:                       # DELETE_ONE_FILE, path in &str=
             name = str(value).replace('\\', '/').rsplit('/', 1)[-1]
             return _reply(cmd, 0 if _delete_clip(name) else -14)
+        if cmd == 2015:                       # LIVE_VIEW_CONTROL
+            globals()['_live_view_on'] = (str(value) == '1')
+            return _reply(cmd, 0)
         if cmd == 3001:                       # CHANGE_MODE
             _mock_mode = int(value)
             return _reply(cmd, 0)
@@ -267,6 +280,10 @@ def index_or_api():
     # GET
     if cmd == 3016:                           # HEART_BEAT
         return _reply(cmd, 0)
+    if cmd == 2019:                           # LIVE_VIEW_URL
+        if LIVE_VIEW_RTSP:
+            return _reply(cmd, 0, MovieLiveViewLink=f'rtsp://{request.host.split(":")[0]}:554/movie123.mov')
+        return _reply(cmd, 0, MovieLiveViewLink=f'http://{request.host.split(":")[0]}:8192')
     if cmd == 3015:                           # GET_FILE_LIST
         if not SUPPORT_FILE_LIST:
             return _reply(cmd, -13)
@@ -290,6 +307,8 @@ def index_or_api():
             '<?xml version="1.0" encoding="UTF-8" ?>\n<LIST>' + "".join(blocks) + '</LIST>',
             mimetype='text/xml')
     if cmd == 3014:                           # bulk settings table
+        if not SUPPORT_BULK_SETTINGS:
+            return _reply(cmd, -13)
         if XML_MODE:
             blocks = "".join(
                 f"<Function><Cmd>{c}</Cmd><Status>{i}</Status></Function>"
@@ -350,6 +369,11 @@ if __name__ == '__main__':
     parser.add_argument('--json', action='store_true',
                         help='Reply in JSON instead of XML. Real firmware uses XML; '
                              'use this to exercise the JSON path.')
+    parser.add_argument('--no-bulk-settings', action='store_true',
+                        help='Pretend cmd 3014 is unsupported, to exercise the '
+                             'per-command settings fallback.')
+    parser.add_argument('--rtsp-live-view', action='store_true',
+                        help='Report an RTSP live view URL instead of MJPEG.')
     parser.add_argument('--no-file-list', action='store_true',
                         help='Pretend cmd 3015 is unsupported, to exercise the '
                              'HTML directory-listing fallback.')
@@ -363,6 +387,8 @@ if __name__ == '__main__':
     globals()['XML_MODE'] = XML_MODE
     globals()['ACCEPT_PARAM_0'] = ACCEPT_PARAM_0
     globals()['SUPPORT_FILE_LIST'] = not args.no_file_list
+    globals()['SUPPORT_BULK_SETTINGS'] = not args.no_bulk_settings
+    globals()['LIVE_VIEW_RTSP'] = args.rtsp_live_view
     print(f"Supports cmd 3015 file list: {not args.no_file_list}")
     print(f"Wire format: {'XML (like real hardware)' if XML_MODE else 'JSON'}")
     print(f"Accepts &param_0=: {ACCEPT_PARAM_0}")

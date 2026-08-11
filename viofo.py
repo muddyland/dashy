@@ -514,6 +514,32 @@ CAMERA_SETTINGS = {
 }
 
 
+def resolve_model(cam_model):
+    """Map a configured model name onto a command set.
+
+    The A229 family alone ships as A229-Plus, A229 Pro, A229S and so on, and an
+    exact-match lookup left anything else with no settings at all: an empty
+    settings page, and every real command rejected as unknown. Match on the
+    family instead, and fall back to the A229 set rather than nothing.
+    """
+    name = (cam_model or '').strip()
+    if name in CAMERA_SETTINGS:
+        return name
+
+    compact = re.sub(r'[^a-z0-9]', '', name.lower())
+    if compact.startswith('a129'):
+        return "A129-Plus"
+    if compact.startswith('a229'):
+        return "A229-Plus"
+    # Unknown model. The A229 set is the broader of the two, so it is the
+    # better guess; unsupported commands simply report an error per setting.
+    logger.warning(
+        f"Unrecognised cam_model {cam_model!r}; using the A229 command set. "
+        "Settings this camera doesn't have will report an error."
+    )
+    return "A229-Plus"
+
+
 # Control and status command IDs (not settings; used for direct actions and queries).
 # Verified against the camera's own behaviour.
 _CMD_CONTROL = {
@@ -528,6 +554,9 @@ _CMD_CONTROL = {
     "GET_BATTERY_LEVEL": 3019,
     "GET_CARD_STATUS":   3024,
     "DELETE_ONE_FILE":   4003,
+    "LIVE_VIEW_CONTROL": 2015,  # par=1 start streaming, par=0 stop
+    "LIVE_VIEW_URL":     2019,  # returns the stream link(s)
+    "LIVE_VIEW_BITRATE": 2014,
 }
 
 # cmd 3001 parameters.
@@ -575,6 +604,9 @@ class Camera:
         self.cam_ip = config_data.get("cam_ip", "192.168.1.254")
         self.cam_wifi_ip = config_data.get("cam_wifi_ip", None)
         self.cam_model = config_data.get('cam_model', "A129-Plus")
+        # Which command set to use. Kept separate from cam_model so the
+        # configured name is still what gets displayed and logged.
+        self.command_set = resolve_model(self.cam_model)
         self.cam_port = int(config_data.get("cam_port", 80) or 80)
 
         # Probe the home-WiFi address first when configured: that is what the
@@ -688,7 +720,7 @@ class Camera:
     @property
     def settings(self):
         """Return the settings definition for the configured camera model."""
-        return CAMERA_SETTINGS.get(self.cam_model, {})
+        return CAMERA_SETTINGS.get(self.command_set, {})
 
     def known_commands(self):
         """Command IDs this model advertises, plus the control/status commands."""
@@ -867,7 +899,7 @@ class Camera:
         plain_filename = file_name.rsplit(".", 1)[0]
         parts = plain_filename.split("_")
 
-        if self.cam_model == "A129-Plus":
+        if self.command_set == "A129-Plus":
             # Example: 20240115123456_0001F.MP4
             if len(parts) < 2:
                 raise ValueError(f"Not an A129-Plus clip name: {file_name!r}")
@@ -1029,8 +1061,62 @@ class Camera:
 
     @property
     def mjpeg_url(self):
-        """MJPEG stream URL served by the camera on port 8192."""
+        """Default MJPEG endpoint, used when the camera doesn't report one."""
         return f"http://{self.connected_ip}:8192" if self.connected_ip else None
+
+    def start_live_view(self):
+        """Tell the camera to start streaming (cmd 2015 par=1).
+
+        Without this the stream port simply isn't serving anything, which is
+        why connecting to it directly did nothing. Returns True if the camera
+        accepted; a rejection is not necessarily fatal, since some models
+        stream unconditionally.
+        """
+        try:
+            result = self.set_setting(_CMD_CONTROL["LIVE_VIEW_CONTROL"], 1)
+            ok = _to_int(result.get('rval'), -1) == 0
+            if not ok:
+                logger.info(f"Camera did not accept live view start (rval={result.get('rval')})")
+            return ok
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not start live view: {e}")
+            return False
+
+    def stop_live_view(self):
+        """Stop the camera streaming (cmd 2015 par=0). Never raises."""
+        try:
+            self.set_setting(_CMD_CONTROL["LIVE_VIEW_CONTROL"], 0)
+        except Exception as e:
+            logger.debug(f"Could not stop live view: {e}")
+
+    def live_view_url(self):
+        """Ask the camera where its live stream is (cmd 2019).
+
+        Returns the URL it reports, or the default MJPEG endpoint when it
+        doesn't answer. Models differ: some serve MJPEG over HTTP, others hand
+        back an RTSP link.
+        """
+        try:
+            result = self._request({"custom": 1, "cmd": _CMD_CONTROL["LIVE_VIEW_URL"]})
+            raw = result.get('raw', '')
+            for tag in ('MovieLiveViewLink', 'PhotoLiveViewLink'):
+                match = re.search(rf'<{tag}>(.*?)</{tag}>', raw, re.I | re.S)
+                if match and match.group(1).strip():
+                    url = match.group(1).strip()
+                    logger.info(f"Camera reported live view URL: {url}")
+                    return url
+            # JSON firmware may just put it in a value field.
+            for key in ('movieliveviewlink', 'cur_value'):
+                value = result.get(key)
+                if isinstance(value, str) and '://' in value:
+                    return value.strip()
+        except CameraOffline:
+            raise
+        except Exception as e:
+            logger.debug(f"Live view URL query failed: {e}")
+        return self.mjpeg_url
 
     def get_camera_info(self):
         """
@@ -1102,17 +1188,24 @@ class Camera:
 
         return False
 
+    # Total wall-clock budget for reading settings one command at a time.
+    # Without a bound this can outlast the web server's own request timeout,
+    # which kills the worker and takes every other request down with it.
+    SETTINGS_BUDGET = 25
+
     def read_all_settings(self):
         """Read every setting for this model.
 
-        cmd 3014 returns the whole settings table in a single XML document.
-        The settings page used to fire one request per setting (~40 of them) on
-        load, which the camera's single-threaded HTTP server could not keep up
-        with.
+        cmd 3014 returns the whole settings table in one document. Where that
+        isn't supported, settings are read one command at a time -- but only
+        within a fixed time budget, because a slow camera times 40 sequential
+        requests into minutes.
 
-        Falls back to reading commands individually if the camera doesn't
-        support the bulk query.
+        Returns (values, info) where info describes what happened, so the UI can
+        say something useful instead of spinning.
         """
+        info = {"method": None, "complete": True, "read": 0, "skipped": 0}
+
         try:
             response = self._request({"custom": 1, "cmd": _CMD_CONTROL["GET_ALL_SETTINGS"]})
         except CameraOffline:
@@ -1125,24 +1218,51 @@ class Camera:
             bulk = _parse_all_settings(response.get('raw', ''))
             if bulk:
                 wanted = self.known_commands()
-                return {
+                values = {
                     str(cmd): {"rval": 0, "cur_value": value}
                     for cmd, value in bulk.items() if cmd in wanted
                 }
-            logger.info("Camera did not return a bulk settings table; reading individually")
+                info.update(method="bulk", read=len(values))
+                if not values:
+                    # The camera answered with a table, but none of it matched
+                    # the commands this model is supposed to have.
+                    logger.warning(
+                        f"Bulk settings table had {len(bulk)} entries, none matching "
+                        f"{self.cam_model}. Raw: {response.get('raw','')[:300]!r}"
+                    )
+                    info.update(complete=False)
+                return values, info
+            logger.info(
+                "Camera did not return a bulk settings table; reading individually. "
+                f"Raw reply: {response.get('raw','')[:200]!r}"
+            )
 
+        info["method"] = "individual"
         values = {}
+        deadline = time.monotonic() + self.SETTINGS_BUDGET
         for group in self.settings.values():
             for item in group:
                 cmd = item["cmd"]
+                if time.monotonic() > deadline:
+                    # Out of time. Report the rest rather than making the caller
+                    # wait, so the page shows what was retrieved.
+                    info.update(complete=False)
+                    info["skipped"] += 1
+                    continue
                 try:
                     values[str(cmd)] = self.get_setting(cmd)
+                    info["read"] += 1
                 except CameraOffline:
-                    values[str(cmd)] = {"rval": -1, "error": "Camera not connected"}
-                    return values
+                    info.update(complete=False)
+                    raise
                 except Exception as e:
                     values[str(cmd)] = {"rval": -1, "error": str(e)}
-        return values
+        if not info["complete"]:
+            logger.warning(
+                f"Settings read hit the {self.SETTINGS_BUDGET}s budget after "
+                f"{info['read']} of {info['read'] + info['skipped']} commands"
+            )
+        return values, info
 
     def start_recording(self):
         return self.set_setting(_CMD_CONTROL["MOVIE_RECORD"], 1)
