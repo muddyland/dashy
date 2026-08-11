@@ -141,15 +141,42 @@ function renderControl(cmd, data) {
         return;
     }
 
-    // Dropdown for everything else
+    // No option list. XML firmware reports settings as a numeric index and
+    // never sends the choices, so a dropdown would hold one meaningless entry.
+    // Show the index in an editable field instead — honest and still usable.
+    if (!options.length) {
+        var group = document.createElement('div');
+        group.className = 'input-group input-group-sm';
+
+        var numInput = document.createElement('input');
+        numInput.type = 'text';
+        numInput.className = 'form-control form-control-sm';
+        numInput.style.cssText = FIELD_STYLE;
+        numInput.value = curValue;
+        numInput.title = 'This camera reports settings as a numeric index rather than a label';
+        numInput.disabled = settingsLocked;
+
+        var save = document.createElement('button');
+        save.className = 'btn btn-sm btn-outline-secondary';
+        save.type = 'button';
+        save.textContent = 'Set';
+        save.disabled = settingsLocked;
+        save.addEventListener('click', function() { saveSetting(cmd, numInput.value); });
+
+        group.appendChild(numInput);
+        group.appendChild(save);
+        container.appendChild(group);
+        return;
+    }
+
+    // Dropdown when the camera tells us the choices.
     var sel = document.createElement('select');
     sel.className = 'form-select form-select-sm';
     sel.style.cssText = FIELD_STYLE;
     sel.disabled = settingsLocked;
     sel.addEventListener('change', function() { saveSetting(cmd, sel.value); });
 
-    var values = options.length ? options : [curValue];
-    values.forEach(function(opt) {
+    options.forEach(function(opt) {
         var option = document.createElement('option');
         option.value = opt;
         option.textContent = opt;

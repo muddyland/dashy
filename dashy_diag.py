@@ -29,7 +29,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from viofo import (  # noqa: E402
-    Camera, _CMD_CONTROL, _parse_camera_response, _parse_all_settings, _new_session,
+    Camera, _CMD_CONTROL, _parse_camera_response, _parse_all_settings, _new_session, _to_int,
 )
 from dashy_config import Config  # noqa: E402
 
@@ -240,7 +240,7 @@ def test_commands(base_url):
         r = session.get(base_url + "/",
                         params={"custom": 1, "cmd": _CMD_CONTROL["GET_ALL_SETTINGS"]},
                         timeout=(3, 15))
-        bulk = _parse_all_settings(r.text)
+        bulk = _parse_all_settings(r.text) or {}
         if bulk:
             print(f"    Returned {len(bulk)} settings in one request.")
             sample = list(bulk.items())[:6]
@@ -249,19 +249,34 @@ def test_commands(base_url):
             print("    No bulk table; Dashy will read settings individually.")
             print(f"    Body: {r.text.strip()[:200]!r}")
 
-        # Which parameter name does this firmware accept for writes? Probed
-        # against the beep setting: harmless, and written back to its own
-        # current value so nothing actually changes.
-        print("\n  Set-parameter name (writes current value back, so nothing changes):")
-        for probe_cmd in (9094, 9403):
-            r = session.get(base_url + "/", params={"custom": 1, "cmd": probe_cmd}, timeout=(3, 10))
-            parsed = _parse_camera_response(r)
-            current = parsed.get('cur_value')
-            if current is None and parsed.get('rval') is not None:
-                current = parsed.get('rval')      # XML puts a GET's value in <Status>
-            if current is None:
-                continue
-            print(f"    cmd {probe_cmd} current value: {current!r}")
+        # Which parameter name does this firmware accept for writes?
+        #
+        # The probe has to use a command this camera actually supports,
+        # otherwise every form is rejected for that reason and the result says
+        # nothing. Candidates are taken from the bulk table where possible,
+        # since those are known-good commands with known-good values, and the
+        # value is written straight back so nothing changes.
+        print("\n  Set-parameter name (writes each value back unchanged):")
+        candidates = [(c, v) for c, v in (bulk or {}).items()
+                      if _to_int(v) is not None and _to_int(v) >= 0]
+        if not candidates:
+            for probe_cmd in (2005, 2007, 9094, 9403):
+                r = session.get(base_url + "/", params={"custom": 1, "cmd": probe_cmd}, timeout=(3, 10))
+                parsed = _parse_camera_response(r)
+                value = parsed.get('cur_value')
+                if value is None:
+                    value = parsed.get('status_value')
+                if _to_int(value) is not None and _to_int(value) >= 0:
+                    candidates = [(probe_cmd, value)]
+                    break
+
+        if not candidates:
+            print("    No supported setting found to probe with; skipping.")
+            print("    (A command returning a negative status is unsupported, so")
+            print("     writing to it tells us nothing about the parameter name.)")
+        else:
+            probe_cmd, current = candidates[0]
+            print(f"    Using cmd {probe_cmd}, current value {current!r}")
             for name in ("par", "str", "param_0"):
                 r2 = session.get(base_url + "/",
                                  params={"custom": 1, "cmd": probe_cmd, name: current},
@@ -269,9 +284,8 @@ def test_commands(base_url):
                 p2 = _parse_camera_response(r2)
                 verdict = "ACCEPTED" if p2.get('rval') == 0 else f"rejected (rval={p2.get('rval')})"
                 print(f"      &{name}= -> {verdict}  {r2.text.strip()[:110]!r}")
-            break
-        else:
-            print("    Could not read a settable value to probe with.")
+            print("    Dashy tries these in order and remembers whichever works,")
+            print("    so it adapts either way.")
     except requests.RequestException as e:
         print(f"  Failed: {e}")
     finally:

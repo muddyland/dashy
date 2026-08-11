@@ -187,6 +187,38 @@ def _strip_xml_decl(text):
     return re.sub(r'^\s*<\?xml[^>]*\?>', '', text).strip()
 
 
+def normalise_setting_read(result):
+    """Turn a raw settings GET into {rval, cur_value} the UI can render.
+
+    On XML firmware a read puts the setting's current value in <Status> -- the
+    same element a write uses for its result code. Text settings come back in
+    <String> instead. Without this the UI looked for cur_value, found nothing,
+    and drew an empty control for every numeric setting.
+
+    A negative status is an error code (-13 is "unsupported command"), not a
+    value.
+    """
+    if not isinstance(result, dict):
+        return {"rval": -1, "error": "Unreadable response"}
+
+    if result.get('cur_value') is not None:
+        return dict(result, rval=0)
+
+    status = result.get('status_value')
+    if status is None:
+        status = result.get('param')
+    if isinstance(status, int):
+        if status < 0:
+            return dict(result, rval=status,
+                        error=f"Not supported by this camera (rval={status})")
+        # The camera reports settings as numeric indices, not labels.
+        return dict(result, rval=0, cur_value=str(status))
+
+    if result.get('error'):
+        return result
+    return dict(result, rval=-1, error="Camera returned no value")
+
+
 def _camera_path_to_url(path):
     """Turn a camera filesystem path into an HTTP path.
 
@@ -1091,6 +1123,27 @@ class Camera:
         except Exception as e:
             logger.debug(f"Could not stop live view: {e}")
 
+    def _absolute_stream_url(self, url):
+        """Fill in the camera's address when it reports a hostless stream URL.
+
+        Cameras have been seen advertising `rtsp:///xxx.mov` -- correct scheme
+        and path, no host at all, because the camera doesn't know its own
+        address. Left as-is that URL resolves to nothing.
+        """
+        if not url or '://' not in url:
+            return url
+        scheme, _, rest = url.partition('://')
+        host, slash, path = rest.partition('/')
+        if host:
+            return url
+        if not self.connected_ip:
+            return url
+        default_port = '554' if scheme.lower() == 'rtsp' else ''
+        host = f"{self.connected_ip}:{default_port}" if default_port else self.connected_ip
+        fixed = f"{scheme}://{host}{slash}{path}"
+        logger.info(f"Camera reported a hostless stream URL {url!r}; using {fixed}")
+        return fixed
+
     def live_view_url(self):
         """Ask the camera where its live stream is (cmd 2019).
 
@@ -1104,14 +1157,14 @@ class Camera:
             for tag in ('MovieLiveViewLink', 'PhotoLiveViewLink'):
                 match = re.search(rf'<{tag}>(.*?)</{tag}>', raw, re.I | re.S)
                 if match and match.group(1).strip():
-                    url = match.group(1).strip()
+                    url = self._absolute_stream_url(match.group(1).strip())
                     logger.info(f"Camera reported live view URL: {url}")
                     return url
             # JSON firmware may just put it in a value field.
             for key in ('movieliveviewlink', 'cur_value'):
                 value = result.get(key)
                 if isinstance(value, str) and '://' in value:
-                    return value.strip()
+                    return self._absolute_stream_url(value.strip())
         except CameraOffline:
             raise
         except Exception as e:
@@ -1214,53 +1267,59 @@ class Camera:
             logger.warning(f"Bulk settings read failed ({e}); falling back to individual reads")
             response = None
 
+        values = {}
         if response:
             bulk = _parse_all_settings(response.get('raw', ''))
-            if bulk:
-                wanted = self.known_commands()
-                values = {
-                    str(cmd): {"rval": 0, "cur_value": value}
-                    for cmd, value in bulk.items() if cmd in wanted
-                }
-                info.update(method="bulk", read=len(values))
-                if not values:
-                    # The camera answered with a table, but none of it matched
-                    # the commands this model is supposed to have.
-                    logger.warning(
-                        f"Bulk settings table had {len(bulk)} entries, none matching "
-                        f"{self.cam_model}. Raw: {response.get('raw','')[:300]!r}"
-                    )
-                    info.update(complete=False)
-                return values, info
-            logger.info(
-                "Camera did not return a bulk settings table; reading individually. "
-                f"Raw reply: {response.get('raw','')[:200]!r}"
-            )
+            wanted = self.known_commands()
+            values = {
+                str(cmd): {"rval": 0, "cur_value": value}
+                for cmd, value in bulk.items() if cmd in wanted
+            }
+            if bulk and not values:
+                logger.info(
+                    f"Bulk settings table had {len(bulk)} entries, none matching "
+                    f"{self.cam_model}. Raw: {response.get('raw','')[:200]!r}"
+                )
 
-        info["method"] = "individual"
-        values = {}
+        # The bulk query is not necessarily complete. Real cameras have been
+        # seen returning a handful of entries -- enough to look like a success
+        # while leaving almost every row on the page empty. Whatever it didn't
+        # cover is read one command at a time.
+        expected = [item["cmd"] for group in self.settings.values() for item in group]
+        missing = [cmd for cmd in expected if str(cmd) not in values]
+
+        if values and not missing:
+            info.update(method="bulk", read=len(values))
+            return values, info
+
+        info["method"] = "bulk+individual" if values else "individual"
+        if values:
+            logger.info(
+                f"Bulk query covered {len(values)} of {len(expected)} settings; "
+                f"reading the remaining {len(missing)} individually"
+            )
+        info["read"] = len(values)
+
         deadline = time.monotonic() + self.SETTINGS_BUDGET
-        for group in self.settings.values():
-            for item in group:
-                cmd = item["cmd"]
-                if time.monotonic() > deadline:
-                    # Out of time. Report the rest rather than making the caller
-                    # wait, so the page shows what was retrieved.
-                    info.update(complete=False)
-                    info["skipped"] += 1
-                    continue
-                try:
-                    values[str(cmd)] = self.get_setting(cmd)
-                    info["read"] += 1
-                except CameraOffline:
-                    info.update(complete=False)
-                    raise
-                except Exception as e:
-                    values[str(cmd)] = {"rval": -1, "error": str(e)}
+        for cmd in missing:
+            if time.monotonic() > deadline:
+                # Out of time. Report the rest rather than making the caller
+                # wait, so the page shows what was retrieved.
+                info.update(complete=False)
+                info["skipped"] += 1
+                continue
+            try:
+                values[str(cmd)] = normalise_setting_read(self.get_setting(cmd))
+                info["read"] += 1
+            except CameraOffline:
+                info.update(complete=False)
+                raise
+            except Exception as e:
+                values[str(cmd)] = {"rval": -1, "error": str(e)}
         if not info["complete"]:
             logger.warning(
                 f"Settings read hit the {self.SETTINGS_BUDGET}s budget after "
-                f"{info['read']} of {info['read'] + info['skipped']} commands"
+                f"{info['read']} of {len(expected)} commands"
             )
         return values, info
 
@@ -1273,15 +1332,100 @@ class Camera:
     def take_photo(self):
         return self.get_setting(_CMD_CONTROL["PHOTO_CAPTURE"])
 
+    # Boundary used for the MJPEG stream we synthesise from RTSP.
+    MJPEG_BOUNDARY = "ffmpegboundary"
+
+    def transcode_rtsp_to_mjpeg(self, rtsp_url, fps=10, width=1280):
+        """Transcode an RTSP stream to MJPEG that a browser <img> can show.
+
+        Cameras that only offer RTSP can't be displayed directly, and telling
+        the user to open VLC isn't much of a live view. ffmpeg turns it into
+        multipart JPEG, which the existing player consumes unchanged.
+
+        Yields the multipart stream. The process is always cleaned up, including
+        when the viewer disconnects mid-stream.
+        """
+        command = [
+            "ffmpeg",
+            "-nostdin",
+            "-loglevel", "error",
+            # The camera's RTSP is usually fine over TCP and far less lossy
+            # than UDP on a busy WiFi link.
+            "-rtsp_transport", "tcp",
+            "-fflags", "nobuffer", "-flags", "low_delay",
+            "-i", rtsp_url,
+            "-an",
+            "-r", str(fps),
+            "-vf", f"scale={width}:-2",
+            "-q:v", "6",
+            "-f", "mpjpeg",
+            "-boundary_tag", self.MJPEG_BOUNDARY,
+            "-",
+        ]
+        logger.info(f"Transcoding live view from {rtsp_url}")
+        try:
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "ffmpeg is not installed, so the RTSP stream cannot be converted "
+                "for the browser."
+            )
+
+        try:
+            while True:
+                chunk = process.stdout.read(4096)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            process.kill()
+            try:
+                stderr = process.stderr.read() or b''
+            except Exception:
+                stderr = b''
+            process.wait()
+            if stderr.strip():
+                logger.warning(f"ffmpeg live view ended: {stderr.decode(errors='replace').strip()[:300]}")
+
+    def probe_rtsp(self, rtsp_url, timeout=12):
+        """Check that ffmpeg can actually open the stream, and say why not.
+
+        Called before committing to a streaming response, so a failure can be
+        reported as an error page rather than an empty image.
+        """
+        command = [
+            "ffmpeg", "-nostdin", "-loglevel", "error",
+            "-rtsp_transport", "tcp",
+            "-i", rtsp_url, "-t", "1", "-f", "null", "-",
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, timeout=timeout,
+                                    stdin=subprocess.DEVNULL)
+        except FileNotFoundError:
+            return False, "ffmpeg is not installed"
+        except subprocess.TimeoutExpired:
+            # Opening took too long, but data may still flow; don't block on it.
+            return True, None
+        if result.returncode == 0:
+            return True, None
+        message = (result.stderr or b'').decode(errors='replace').strip()
+        return False, message.splitlines()[-1] if message else f"ffmpeg exited {result.returncode}"
+
     def generate_video_frames(self):
+        """Legacy MPEG-TS transcode, kept for the /stream endpoint."""
         if not self.connected or not self.connected_ip:
-            raise Exception("Camera is not connected")
+            raise CameraOffline("Camera is not connected")
         cmd = [
-            "ffmpeg", "-i", f"rtsp://{self.connected_ip}:554/movie123.mov", 
+            "ffmpeg", "-nostdin", "-loglevel", "error",
+            "-rtsp_transport", "tcp",
+            "-i", f"rtsp://{self.connected_ip}:554/movie123.mov",
             "-c:v", "libx264", "-preset", "ultrafast", "-f", "mpegts", "-"
         ]
-        ffmpeg_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
+        ffmpeg_process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
         try:
             while True:
                 frame = ffmpeg_process.stdout.read(8192)

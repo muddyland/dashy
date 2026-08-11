@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, Response, jsonify
 from viofo import (
     Camera, Downloads, DownloadsDB, CameraStatus, CameraOffline,
-    is_safe_clip_name, is_safe_clip_url,
+    is_safe_clip_name, is_safe_clip_url, normalise_setting_read,
 )
 from dashy_config import Config
 import logging
@@ -631,11 +631,25 @@ def mjpeg_stream():
     url = cam.live_view_url()
 
     if url and url.lower().startswith('rtsp://'):
-        # Can't hand RTSP to an <img>. Say so plainly rather than failing.
-        cam.stop_live_view()
-        logger.info(f"Camera offers RTSP live view at {url}")
-        return (f"This camera streams over RTSP ({url}), which the browser cannot "
-                f"display directly. Open it in a player such as VLC."), 501
+        # A browser can't show RTSP, so transcode it to MJPEG with ffmpeg
+        # rather than sending the user off to VLC.
+        ok, why = cam.probe_rtsp(url)
+        if not ok:
+            cam.stop_live_view()
+            logger.warning(f"RTSP live view at {url} unusable: {why}")
+            return f"Could not open the camera's RTSP stream ({url}): {why}", 502
+
+        def generate_rtsp():
+            try:
+                for chunk in cam.transcode_rtsp_to_mjpeg(url):
+                    yield chunk
+            finally:
+                cam.stop_live_view()
+
+        return Response(
+            generate_rtsp(),
+            content_type=f"multipart/x-mixed-replace; boundary={cam.MJPEG_BOUNDARY}",
+        )
 
     try:
         r = http_requests.get(url, stream=True, timeout=(3.05, 30))
@@ -839,7 +853,7 @@ def api_cam_setting(cmd):
                     "camera_response": result.get('raw'),
                 }), 502
             return jsonify(result)
-        return jsonify(cam.get_setting(cmd))
+        return jsonify(normalise_setting_read(cam.get_setting(cmd)))
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
     except Exception as e:
