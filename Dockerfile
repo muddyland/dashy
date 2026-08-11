@@ -1,4 +1,7 @@
-FROM python:3.12
+# Overridable so CI can pull the base image through the GitLab Dependency
+# Proxy. The default keeps plain `docker build .` working unchanged.
+ARG BASE_IMAGE=python:3.12
+FROM ${BASE_IMAGE}
 
 SHELL ["/bin/bash", "-c"]
 

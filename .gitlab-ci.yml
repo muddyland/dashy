@@ -1,20 +1,38 @@
 stages:
   - build
 
+# All Docker Hub images are pulled through the GitLab Dependency Proxy, which
+# caches them in this group. That avoids Docker Hub's anonymous pull rate limit
+# (the usual cause of "toomanyrequests" build failures) and is faster on repeat
+# builds.
+#
+# CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX is only defined for projects in a
+# group. If this project is ever moved to a personal namespace, the variable is
+# empty and the image references below become invalid -- move it back, or drop
+# the prefix.
+
 build:
   stage: build
   tags:
-  - saas-linux-small-amd64
-  image: docker:24.0.5
+    - saas-linux-small-amd64
+  image: ${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/docker:24.0.5
   services:
-   - docker:24.0.5-dind
+    - name: ${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/docker:24.0.5-dind
+      alias: docker
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
+    # Base image for the Dockerfile, pulled through the proxy as well. The
+    # image: and services: keys above are resolved by the runner, but anything
+    # the build itself pulls has to be told explicitly.
+    BASE_IMAGE: ${CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX}/python:3.12
   before_script:
     - until docker info; do sleep 1; done
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    # The build pulls the base image from inside dind, which has its own
+    # credentials, so it needs its own login to the proxy.
+    - docker login -u "$CI_DEPENDENCY_PROXY_USER" -p "$CI_DEPENDENCY_PROXY_PASSWORD" "$CI_DEPENDENCY_PROXY_SERVER"
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   script:
     - docker version
-    - echo "Building Docker image..."
-    - docker build --tag $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME .
-    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+    - echo "Building Docker image from $BASE_IMAGE..."
+    - docker build --build-arg BASE_IMAGE="$BASE_IMAGE" --tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME"
