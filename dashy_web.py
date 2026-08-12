@@ -6,7 +6,7 @@ import requests as http_requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, Response, jsonify
 from viofo import (
-    Camera, Downloads, DownloadsDB, CameraStatus, CameraOffline,
+    Camera, Downloads, DownloadsDB, CameraStatus, CameraOffline, CameraBusy,
     is_safe_clip_name, is_safe_clip_url, normalise_setting_read,
 )
 from dashy_config import Config
@@ -466,6 +466,8 @@ def api_queue_prune():
         removed = downloads.prune_missing(cam)
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
+    except CameraBusy as e:
+        return jsonify({"error": str(e), "busy": True}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 502
     return jsonify({"removed": removed, "remaining": DownloadsDB(config).queue_length()})
@@ -614,6 +616,73 @@ def cam_live():
                            cam_proxy=str(str(request.host).split(":")[0]) + f":{config_json.get('cam_proxy_port', 8080)}")
 
 
+def _short_error(error):
+    """A one-line reason from a requests exception.
+
+    The raw string nests urllib3's retry and pool detail, which is noise in a
+    UI message -- the useful part is the innermost cause.
+    """
+    text = str(error)
+    for marker in ('Connection refused', 'Name or service not known',
+                   'No route to host', 'timed out', 'Connection reset by peer',
+                   'Remote end closed connection without response'):
+        if marker in text:
+            return marker
+    return text.split(':')[-1].strip()[:160] or type(error).__name__
+
+
+@app.route('/api/cam/stream_check')
+def api_cam_stream_check():
+    """Report whether live view can work, without opening a stream.
+
+    The live page needs to explain a failure. It must not do that by fetching
+    the stream again: that response never ends, so the connection stays open,
+    pinning a worker thread and any ffmpeg process behind it.
+    """
+    if not cam_status.connected:
+        return jsonify({"ok": False, "reason": "Camera is not connected."})
+    if downloading():
+        return jsonify({"ok": False, "reason": "A download is in progress; live view resumes when it finishes."})
+
+    try:
+        url = cam.live_view_url()
+    except CameraOffline:
+        return jsonify({"ok": False, "reason": "Camera is not connected."})
+    except CameraBusy as e:
+        return jsonify({"ok": False, "reason": str(e)})
+    except Exception as e:
+        return jsonify({"ok": False, "reason": f"Could not ask the camera for a stream URL: {e}"})
+
+    if not url:
+        return jsonify({"ok": False, "reason": "The camera did not report a stream URL."})
+
+    if url.lower().startswith('rtsp://'):
+        ok, why = cam.probe_rtsp(url)
+        return jsonify({
+            "ok": ok, "url": url, "kind": "rtsp",
+            "reason": None if ok else f"Could not open the camera's RTSP stream ({url}): {why}",
+        })
+
+    try:
+        r = http_requests.get(url, stream=True, timeout=(3.05, 8))
+        status = r.status_code
+        r.close()
+    except Exception as e:
+        return jsonify({"ok": False, "url": url, "kind": "http",
+                        "reason": f"Could not connect to {url}: {_short_error(e)}"})
+    return jsonify({
+        "ok": status == 200, "url": url, "kind": "http",
+        "reason": None if status == 200 else f"The camera returned HTTP {status} for {url}.",
+    })
+
+
+# Only one live stream at a time. Each one holds a worker thread (and an ffmpeg
+# process for RTSP cameras) for as long as it runs, so letting them accumulate
+# exhausts the pool and hangs every page.
+_stream_lock = threading.Lock()
+_active_stream = {"generation": 0}
+
+
 @app.route('/cam/mjpeg_stream')
 def mjpeg_stream():
     """Proxy the camera's live stream.
@@ -627,8 +696,24 @@ def mjpeg_stream():
     if downloading():
         return "A download is in progress; live view is unavailable until it finishes", 409
 
-    cam.start_live_view()
-    url = cam.live_view_url()
+    # Claim this stream. Any stream still running from an earlier request is
+    # superseded and stops on its next chunk, so a page that reconnects (after
+    # a photo interrupts the feed, say) replaces its stream instead of adding
+    # another one.
+    with _stream_lock:
+        _active_stream["generation"] += 1
+        generation = _active_stream["generation"]
+
+    def superseded():
+        return _active_stream["generation"] != generation
+
+    try:
+        cam.start_live_view()
+        url = cam.live_view_url()
+    except CameraBusy as e:
+        return str(e), 503
+    except CameraOffline:
+        return "Camera not connected", 503
 
     if url and url.lower().startswith('rtsp://'):
         # A browser can't show RTSP, so transcode it to MJPEG with ffmpeg
@@ -642,9 +727,13 @@ def mjpeg_stream():
         def generate_rtsp():
             try:
                 for chunk in cam.transcode_rtsp_to_mjpeg(url):
+                    if superseded():
+                        logger.info("Live view superseded by a newer viewer; stopping")
+                        break
                     yield chunk
             finally:
-                cam.stop_live_view()
+                if not superseded():
+                    cam.stop_live_view()
 
         return Response(
             generate_rtsp(),
@@ -668,12 +757,16 @@ def mjpeg_stream():
     def generate():
         try:
             for chunk in r.iter_content(chunk_size=4096):
+                if superseded():
+                    logger.info("Live view superseded by a newer viewer; stopping")
+                    break
                 if chunk:
                     yield chunk
         finally:
             r.close()
             # Leaving the stream running keeps the camera encoding for nobody.
-            cam.stop_live_view()
+            if not superseded():
+                cam.stop_live_view()
 
     return Response(generate(), content_type=content_type)
 
@@ -689,6 +782,8 @@ def api_cam_info():
         return jsonify(cam.get_camera_info())
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
+    except CameraBusy as e:
+        return jsonify({"error": str(e), "busy": True}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -761,6 +856,8 @@ def api_cam_control():
         result = handler()
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
+    except CameraBusy as e:
+        return jsonify({"error": str(e), "busy": True}), 503
     except Exception as e:
         logger.error(f"Camera action {action} failed: {e}")
         return jsonify({"error": str(e)}), 502
@@ -792,6 +889,8 @@ def api_cam_settings_all():
         return jsonify({"settings": values, "info": info})
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
+    except CameraBusy as e:
+        return jsonify({"error": str(e), "busy": True}), 503
     except Exception as e:
         logger.error(f"Settings read failed: {e}")
         return jsonify({"error": str(e)}), 502
@@ -818,6 +917,8 @@ def api_cam_raw():
         return jsonify({"cmd": cmd, "sent_value": value, "result": result})
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
+    except CameraBusy as e:
+        return jsonify({"error": str(e), "busy": True}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -856,6 +957,8 @@ def api_cam_setting(cmd):
         return jsonify(normalise_setting_read(cam.get_setting(cmd)))
     except CameraOffline:
         return jsonify({"error": "Camera not connected"}), 503
+    except CameraBusy as e:
+        return jsonify({"error": str(e), "busy": True}), 503
     except Exception as e:
         logger.error(f"Camera setting {cmd} failed: {e}")
         return jsonify({"error": str(e)}), 502

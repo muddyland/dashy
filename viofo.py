@@ -45,8 +45,37 @@ CONTROL_TIMEOUT = (3.05, 15)
 SCRAPE_TIMEOUT = (3.05, 60)
 DOWNLOAD_TIMEOUT = (3.05, 45)
 
+class CameraBusy(Exception):
+    """Raised when the camera is tied up with another request.
+
+    Distinct from being offline: the camera is there, but something else is
+    still talking to it and waiting would only pile up threads.
+    """
+
+
 # Serialises control/settings/listing requests against the camera.
+#
+# Bounded on acquisition. Without a timeout, one request to a camera that has
+# stopped answering holds this for its full read timeout while every other
+# request queues behind it -- and each waiter occupies a web server thread, so
+# a single stuck call takes the whole UI down with it. Better to fail the
+# latecomers quickly and say the camera is busy.
 _CONTROL_LOCK = threading.Lock()
+# Kept short: the web UI must fail fast rather than tie up worker threads
+# waiting on a camera that is busy. Callers that can afford to wait pass more.
+CONTROL_LOCK_WAIT = 6
+
+
+@contextlib.contextmanager
+def _control_lock(timeout=CONTROL_LOCK_WAIT):
+    if not _CONTROL_LOCK.acquire(timeout=timeout):
+        raise CameraBusy(
+            f"Camera did not free up within {timeout}s; another request is still running"
+        )
+    try:
+        yield
+    finally:
+        _CONTROL_LOCK.release()
 
 
 def _new_session():
@@ -80,6 +109,24 @@ def _reset_sessions():
             pass
     _control_session = _new_session()
     _download_session = _new_session()
+
+
+def _is_dropped_connection(error):
+    """True if the camera closed the connection without answering.
+
+    Distinguishes a stale pooled keep-alive socket -- routine, and safe to
+    retry -- from the camera genuinely being unreachable.
+    """
+    if isinstance(error, requests.exceptions.ConnectionError):
+        text = str(error)
+        return any(marker in text for marker in (
+            'RemoteDisconnected',
+            'Connection aborted',
+            'ConnectionResetError',
+            'Connection reset by peer',
+            'BadStatusLine',
+        ))
+    return False
 
 
 def _parse_camera_response(response):
@@ -784,7 +831,7 @@ class Camera:
         if listing is not None:
             return listing
 
-        with _CONTROL_LOCK:
+        with _control_lock():
             response = _control_session.get(base_url + file_dir, timeout=SCRAPE_TIMEOUT)
 
         if response.status_code == 404:
@@ -962,27 +1009,52 @@ class Camera:
                 "mode" : mode, 
                 'thumbnail' : thumbnail_name
             }
-    def _request(self, params, timeout=CONTROL_TIMEOUT):
+    def _request(self, params, timeout=CONTROL_TIMEOUT, lock_wait=CONTROL_LOCK_WAIT):
         """Issue one control request, serialised against all other control
-        traffic, and return the normalised response."""
+        traffic, and return the normalised response.
+
+        `lock_wait` bounds how long this will queue behind other camera
+        traffic. Bulk work passes a short value so a busy camera fails those
+        requests quickly instead of consuming the caller's whole time budget.
+        """
         base_url = self.require_base_url()
-        with _CONTROL_LOCK:
+        with _control_lock(lock_wait):
             try:
                 response = _control_session.get(base_url + "/", params=params, timeout=timeout)
             except requests.RequestException as e:
-                # A dead keep-alive socket surfaces here; force a re-probe so
-                # the UI reflects reality instead of retrying a dead link.
-                logger.warning(f"Camera request {params} failed: {e}")
-                self.check_camera_connection(force=True)
-                raise
+                # A pooled keep-alive socket the camera has already closed
+                # shows up here as "Remote end closed connection without
+                # response". The camera is fine -- it just dropped an idle
+                # connection, which these cameras do readily (and always after
+                # an action that resets their HTTP server, like taking a
+                # photo). Retry once on a fresh connection before concluding
+                # anything is wrong.
+                if _is_dropped_connection(e):
+                    logger.info(
+                        f"Camera closed a pooled connection for cmd "
+                        f"{params.get('cmd')}; retrying on a new one"
+                    )
+                    _reset_sessions()
+                    try:
+                        response = _control_session.get(
+                            base_url + "/", params=params, timeout=timeout
+                        )
+                    except requests.RequestException as retry_error:
+                        logger.warning(f"Camera request {params} failed after retry: {retry_error}")
+                        self.check_camera_connection(force=True)
+                        raise
+                else:
+                    logger.warning(f"Camera request {params} failed: {e}")
+                    self.check_camera_connection(force=True)
+                    raise
         response.raise_for_status()
         parsed = _parse_camera_response(response)
         logger.debug(f"cmd {params.get('cmd')} -> {parsed}")
         return parsed
 
-    def get_setting(self, cmd):
+    def get_setting(self, cmd, lock_wait=CONTROL_LOCK_WAIT):
         """GET /?custom=1&cmd=N -- read a setting or status value."""
-        return self._request({"custom": 1, "cmd": int(cmd)})
+        return self._request({"custom": 1, "cmd": int(cmd)}, lock_wait=lock_wait)
 
     def set_setting(self, cmd, value):
         """GET /?custom=1&cmd=N&<param>=VALUE -- write a setting.
@@ -1192,6 +1264,11 @@ class Camera:
                 if 'param' not in response and 'status_value' in response:
                     response = dict(response, param=response['status_value'], rval=0)
                 result[key] = response
+            except CameraBusy:
+                # No point waiting out the timeout for each remaining command:
+                # the camera is tied up, and four sequential waits is the
+                # difference between a slow page and an apparently hung one.
+                raise
             except Exception as e:
                 result[key] = {"rval": -1, "error": str(e)}
         return result
@@ -1227,7 +1304,7 @@ class Camera:
         # Fallback: the delete link the directory index itself uses.
         try:
             base_url = self.require_base_url()
-            with _CONTROL_LOCK:
+            with _control_lock():
                 response = _control_session.get(
                     base_url + url_path, params={"del": 1}, timeout=CONTROL_TIMEOUT
                 )
@@ -1245,6 +1322,9 @@ class Camera:
     # Without a bound this can outlast the web server's own request timeout,
     # which kills the worker and takes every other request down with it.
     SETTINGS_BUDGET = 25
+    # Queue only briefly for each individual read. A camera busy with something
+    # else should fail these fast rather than spend the whole budget waiting.
+    SETTINGS_LOCK_WAIT = 4
 
     def read_all_settings(self):
         """Read every setting for this model.
@@ -1309,14 +1389,24 @@ class Camera:
                 info["skipped"] += 1
                 continue
             try:
-                values[str(cmd)] = normalise_setting_read(self.get_setting(cmd))
+                values[str(cmd)] = normalise_setting_read(
+                    self.get_setting(cmd, lock_wait=self.SETTINGS_LOCK_WAIT)
+                )
                 info["read"] += 1
             except CameraOffline:
                 info.update(complete=False)
                 raise
+            except CameraBusy:
+                # Something else is holding the camera. Working through the
+                # remaining commands would just wait out the timeout on each,
+                # turning a slow page into an apparently hung one.
+                info.update(complete=False, busy=True)
+                logger.info("Camera busy during settings read; returning what we have")
+                break
             except Exception as e:
                 values[str(cmd)] = {"rval": -1, "error": str(e)}
-        if not info["complete"]:
+        info["skipped"] = max(0, len(expected) - len(values))
+        if not info["complete"] and not info.get("busy"):
             logger.warning(
                 f"Settings read hit the {self.SETTINGS_BUDGET}s budget after "
                 f"{info['read']} of {len(expected)} commands"

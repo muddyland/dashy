@@ -94,15 +94,15 @@ function streamFailed() {
     var detail = document.getElementById('stream-error-detail');
     detail.textContent = 'Checking why…';
 
-    fetch('/cam/mjpeg_stream')
-        .then(function(r) {
-            if (r.ok) {
-                detail.textContent = 'The stream is available but the browser could not display it.';
-                return;
-            }
-            return r.text().then(function(t) {
-                detail.textContent = t || ('The camera returned HTTP ' + r.status + '.');
-            });
+    // Ask a plain JSON endpoint why, rather than re-opening the stream.
+    // Fetching the stream itself leaves an endless response body open, which
+    // pins a server thread and (for RTSP) an ffmpeg process every time.
+    fetch('/api/cam/stream_check')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            detail.textContent = d.ok
+                ? 'The stream is available but the browser could not display it.'
+                : (d.reason || 'The camera did not provide a usable stream.');
         })
         .catch(function(e) { detail.textContent = 'Could not reach Dashy: ' + e; });
 }
